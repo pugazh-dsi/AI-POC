@@ -27,6 +27,14 @@
   --color-blue-800: #1E40AF;
   --color-blue-900: #1E3A8A;
 
+  /* Tool Calling Violet */
+  --color-violet-50: #F5F3FF;
+  --color-violet-100: #EDE9FE;
+  --color-violet-400: #A78BFA;
+  --color-violet-500: #8B5CF6;
+  --color-violet-600: #7C3AED;
+  --color-violet-700: #6D28D9;
+
   /* Success Green */
   --color-green-50: #F0FDF4;
   --color-green-100: #DCFCE7;

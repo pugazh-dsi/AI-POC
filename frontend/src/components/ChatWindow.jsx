@@ -2,7 +2,12 @@ import { useEffect, useRef } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
-export default function ChatWindow({ messages, isStreaming = false }) {
+export default function ChatWindow({
+  messages,
+  isStreaming = false,
+  emptyTitle = 'Start a Conversation',
+  emptyText = 'Upload a document and ask questions to get AI-powered answers with source citations.',
+}) {
   const messagesEndRef = useRef(null)
 
   // Auto-scroll to bottom when messages change or during streaming
@@ -18,8 +23,8 @@ export default function ChatWindow({ messages, isStreaming = false }) {
               <path strokeLinecap="round" strokeLinejoin="round" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
             </svg>
           </div>
-          <h2 className="text-2xl font-semibold text-gray-900 mb-2">Start a Conversation</h2>
-          <p className="text-gray-500">Upload a document and ask questions to get AI-powered answers with source citations.</p>
+          <h2 className="text-2xl font-semibold text-gray-900 mb-2">{emptyTitle}</h2>
+          <p className="text-gray-500">{emptyText}</p>
         </div>
       </div>
     )
@@ -31,8 +36,11 @@ export default function ChatWindow({ messages, isStreaming = false }) {
         const isLastMessage = i === messages.length - 1
         const isCurrentlyStreaming = isStreaming && isLastMessage && msg.role === 'assistant'
 
-        // Get sources from either old format (msg.sources) or new AI SDK format (msg.data.sources)
-        const sources = msg.sources || msg.data?.sources || []
+        // Sources/usage arrive as an AI SDK message annotation ("8:" stream part).
+        // msg.sources is the legacy non-streaming shape.
+        const meta = msg.annotations?.[0] || {}
+        const sources = msg.sources || meta.sources || []
+        const usage = meta.usage || msg.usage
 
         return (
           <div
@@ -73,24 +81,24 @@ export default function ChatWindow({ messages, isStreaming = false }) {
                 </div>
               )}
               {/* Token usage display */}
-              {(msg.data?.usage || msg.usage) && (
+              {usage && (
                 <div className="mt-3 pt-3 border-t border-gray-200">
                   <div className="flex gap-4 text-xs text-gray-600">
                     <span>
                       <span className="font-medium text-blue-600">
-                        {(msg.data?.usage?.prompt_tokens || msg.usage?.prompt_tokens)?.toLocaleString()}
+                        {usage.prompt_tokens?.toLocaleString()}
                       </span> prompt
                     </span>
                     <span className="text-gray-400">•</span>
                     <span>
                       <span className="font-medium text-green-600">
-                        {(msg.data?.usage?.completion_tokens || msg.usage?.completion_tokens)?.toLocaleString()}
+                        {usage.completion_tokens?.toLocaleString()}
                       </span> completion
                     </span>
                     <span className="text-gray-400">•</span>
                     <span>
                       <span className="font-medium text-gray-900">
-                        {(msg.data?.usage?.total_tokens || msg.usage?.total_tokens)?.toLocaleString()}
+                        {usage.total_tokens?.toLocaleString()}
                       </span> total
                     </span>
                   </div>

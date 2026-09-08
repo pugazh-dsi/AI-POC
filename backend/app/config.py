@@ -8,10 +8,25 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 UPLOAD_DIR = BASE_DIR / "uploads"
 FAISS_INDEX_DIR = BASE_DIR / "faiss_index"
 
+DATA_DIR = BASE_DIR / "data"
+
 UPLOAD_DIR.mkdir(exist_ok=True)
 FAISS_INDEX_DIR.mkdir(exist_ok=True)
+DATA_DIR.mkdir(exist_ok=True)
 
+# Local application database (provider config + API keys). Stays inside the repo
+# under backend/data/ and is gitignored — it holds secrets.
+DATABASE_FILE = DATA_DIR / "app.db"
+SECRET_KEY_FILE = DATA_DIR / ".secret_key"
+
+# Env keys act as a fallback when a provider has no key saved in the database
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "") or os.getenv("GOOGLE_API_KEY", "")
+
+# Optional master key for encrypting stored API keys. Generated on first run and
+# written to SECRET_KEY_FILE when unset.
+APP_SECRET_KEY = os.getenv("APP_SECRET_KEY", "")
 
 CHUNK_SIZE = 1000
 CHUNK_OVERLAP = 200
@@ -20,7 +35,12 @@ MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
 ALLOWED_EXTENSIONS = {".pdf", ".txt", ".docx"}
 
 EMBEDDING_MODEL = "text-embedding-ada-002"
-LLM_MODEL = "gpt-3.5-turbo"
+LLM_MODEL = "gpt-3.5-turbo"  # default OpenAI chat model
+DEFAULT_CHAT_PROVIDER = "openai"
+
+# Generation settings shared by every chat provider
+TEMPERATURE = 0.3
+MAX_ANSWER_TOKENS = 1500
 TOP_K_RESULTS = 8
 SIMILARITY_THRESHOLD = 1.8  # Max L2 distance — ada-002 normalized vectors range 0-2
 
@@ -28,3 +48,10 @@ SIMILARITY_THRESHOLD = 1.8  # Max L2 distance — ada-002 normalized vectors ran
 MAX_QUESTION_LENGTH = 1000
 RATE_LIMIT_REQUESTS = 20  # Max requests per window
 RATE_LIMIT_WINDOW = 60  # Window in seconds
+
+# Embedding request batching — OpenAI caps inputs per embeddings request
+EMBEDDING_BATCH_SIZE = 100
+
+# Max tokens of document context sent to the LLM. gpt-3.5-turbo has a 16,385
+# token window; this leaves room for the system prompt and a 1500-token answer.
+MAX_CONTEXT_TOKENS = 12000

@@ -27,29 +27,47 @@ class ChatRequest(BaseModel):
     messages: List[Message]
 
 
+def _finish_frame(usage: Dict | None = None) -> str:
+    """AI SDK v4 finish-message part. Must carry a "finishReason" string."""
+    usage = usage or {}
+    return "d:" + json.dumps({
+        "finishReason": "stop",
+        "usage": {
+            "promptTokens": usage.get("prompt_tokens", 0),
+            "completionTokens": usage.get("completion_tokens", 0),
+        },
+    }) + "\n"
+
+
 async def format_sse_stream(generator):
     """
-    Convert generator events to AI SDK-compatible Server-Sent Events format.
+    Convert generator events to AI SDK v4 data-stream parts.
 
-    AI SDK SSE format:
-    - "0:..." for text chunks (streamed content)
-    - "2:..." for data events (metadata like sources)
-    - Each line is JSON-encoded and newline-terminated
+    Part codes (validated by @ai-sdk/ui-utils — a malformed part aborts the
+    stream client-side):
+    - "0:<json string>"  text chunk
+    - "8:<json array>"   message annotations, attached to the assistant message
+    - "d:<json object>"  finish message, requires a "finishReason" string
+    - "3:<json string>"  error
     """
+    usage = None
     try:
         async for event in generator:
             if event["type"] == "text":
                 # Text chunk: prefix with "0:" (AI SDK text event)
                 yield f"0:{json.dumps(event['content'])}\n"
             elif event["type"] == "data":
-                # Data event: prefix with "d:" for AI SDK v4 (changed from "2:" in v3)
-                # Send as JSON object directly (not wrapped in array)
-                yield f"d:{json.dumps(event['data'])}\n"
+                # Sources/usage travel as a message annotation so they stay
+                # attached to this specific assistant message.
+                usage = event["data"].get("usage")
+                yield f"8:{json.dumps([event['data']])}\n"
     except Exception as e:
-        # On error, send error event and close stream
-        error_msg = "An error occurred during streaming."
-        yield f"0:{json.dumps(error_msg)}\n"
+        # On error, send an error part so the client surfaces it
         print(f"SSE formatting error: {e}")
+        yield f"3:{json.dumps('An error occurred during streaming.')}\n"
+        return
+
+    yield _finish_frame(usage)
 
 
 @router.post("/chat")
@@ -89,6 +107,7 @@ async def chat_stream(request: ChatRequest):
         async def blocked_response():
             safe_msg = "I can only answer questions about your uploaded documents."
             yield f"0:{json.dumps(safe_msg)}\n"
+            yield _finish_frame()
 
         return StreamingResponse(
             blocked_response(),

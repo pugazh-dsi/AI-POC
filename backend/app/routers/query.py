@@ -1,6 +1,7 @@
 from pydantic import BaseModel
 
 from fastapi import APIRouter, HTTPException
+from starlette.concurrency import run_in_threadpool
 
 from app.services.qa_service import answer_question
 from app.sanitizer import sanitize_question, detect_injection
@@ -26,7 +27,8 @@ async def query_documents(request: QueryRequest):
         }
 
     try:
-        result = answer_question(question)
+        # answer_question makes blocking OpenAI calls — keep them off the event loop
+        result = await run_in_threadpool(answer_question, question)
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error answering question: {str(e)}")

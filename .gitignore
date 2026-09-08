@@ -16,6 +16,9 @@ env/
 backend/uploads/
 backend/faiss_index/
 
+# ── Local app database (contains encrypted API keys) ──────
+backend/data/
+
 # ── Frontend ──────────────────────────────────────────────
 frontend/node_modules/
 frontend/dist/
@@ -51,3 +54,6 @@ frontend-design/
 
 # ── Keep .claude/ and CLAUDE.md ───────────────────────────
 # (no ignore rules for these - they are committed intentionally)
+
+# ── app.sh runtime state ──────────────────────────────────
+.run/

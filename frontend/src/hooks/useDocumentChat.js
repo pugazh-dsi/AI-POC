@@ -4,12 +4,15 @@ import { useState, useCallback } from 'react';
 /**
  * Custom hook wrapping AI SDK's useChat for document Q&A functionality.
  * Handles streaming responses with source citations and upload notifications.
+ *
+ * @param {{api?: string}} options - endpoint to stream from. Each tile owns its
+ *   own pipeline (/api/chat, /api/tools/chat, ...) but shares this hook.
  */
-export function useDocumentChat() {
+export function useDocumentChat({ api = '/api/chat' } = {}) {
   const [systemMessages, setSystemMessages] = useState([]);
 
   const chat = useChat({
-    api: '/api/chat',
+    api,
     onFinish: (message, { data }) => {
       // Sources are streamed as data and automatically attached to message
       // No additional processing needed - AI SDK handles this

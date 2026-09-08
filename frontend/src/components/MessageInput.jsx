@@ -1,6 +1,10 @@
 import { useState } from 'react'
 
-export default function MessageInput({ onSend, disabled }) {
+export default function MessageInput({
+  onSend,
+  disabled,
+  placeholder = 'Ask a question about your documents...',
+}) {
   const [input, setInput] = useState('')
 
   const handleSubmit = (e) => {
@@ -17,7 +21,7 @@ export default function MessageInput({ onSend, disabled }) {
           type="text"
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          placeholder="Ask a question about your documents..."
+          placeholder={placeholder}
           disabled={disabled}
           className="flex-1 rounded-lg border border-gray-300 px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:opacity-50 disabled:bg-gray-50 transition-all shadow-sm"
         />

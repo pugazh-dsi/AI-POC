@@ -1,12 +1,10 @@
 import re
 
-from openai import OpenAI
-
-from app.config import OPENAI_API_KEY, LLM_MODEL, TOP_K_RESULTS
+from app.config import TOP_K_RESULTS
+from app.services.context_builder import build_context
 from app.services.embedding_service import get_embedding
+from app.services.providers import get_active_chat_provider
 from app.store.vector_store import search, get_all_chunks, get_document_list
-
-client = OpenAI(api_key=OPENAI_API_KEY)
 
 SYSTEM_PROMPT = """\
 You are a helpful and knowledgeable document assistant. Your job is to answer questions using the provided document context.
@@ -63,34 +61,31 @@ def answer_question(question: str) -> dict:
             "sources": [],
         }
 
-    context = "\n\n---\n\n".join(
-        f"[From: {r['filename']}]\n{r['text']}" for r in results
+    # Trim to the model's context budget — the summary path can return every
+    # chunk of a document, which easily overflows the 16k window.
+    context, used = build_context(results)
+
+    if not context:
+        return {
+            "answer": "This information doesn't appear in the uploaded documents.",
+            "sources": [],
+        }
+
+    # XML delimiters are part of the injection defense — unchanged across providers
+    user_prompt = (
+        f"<document_context>\n{context}\n</document_context>\n\n"
+        f"<user_question>\n{question}\n</user_question>"
     )
 
-    response = client.chat.completions.create(
-        model=LLM_MODEL,
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {
-                "role": "user",
-                "content": (
-                    f"<document_context>\n{context}\n</document_context>\n\n"
-                    f"<user_question>\n{question}\n</user_question>"
-                ),
-            },
-        ],
-        temperature=0.3,
-        max_tokens=1500,
-    )
+    provider = get_active_chat_provider()
+    result = provider.complete(SYSTEM_PROMPT, user_prompt)
 
-    sources = list({r["filename"] for r in results})
+    sources = list({r["filename"] for r in used})
 
     return {
-        "answer": response.choices[0].message.content,
+        "answer": result["text"],
         "sources": sources,
-        "usage": {
-            "prompt_tokens": response.usage.prompt_tokens,
-            "completion_tokens": response.usage.completion_tokens,
-            "total_tokens": response.usage.total_tokens,
-        }
+        "provider": provider.label,
+        "model": provider.model,
+        "usage": result["usage"],
     }

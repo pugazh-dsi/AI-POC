@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from fastapi import APIRouter, UploadFile, File, HTTPException
+from starlette.concurrency import run_in_threadpool
 
 from app.config import UPLOAD_DIR, ALLOWED_EXTENSIONS, MAX_FILE_SIZE
 from app.services.document_processor import extract_text, chunk_text
@@ -10,9 +11,28 @@ from app.store.vector_store import add_vectors, get_document_list, remove_docume
 router = APIRouter()
 
 
+def safe_filename(filename: str) -> str:
+    """Reduce a client-supplied filename to a bare name inside UPLOAD_DIR.
+
+    Without this, a filename like "../app/main.py" escapes the uploads
+    directory and overwrites arbitrary files.
+    """
+    name = Path(filename or "").name.replace("\x00", "").strip()
+    if not name or name in {".", ".."}:
+        raise HTTPException(status_code=400, detail="Invalid filename.")
+
+    resolved = (UPLOAD_DIR / name).resolve()
+    if resolved.parent != UPLOAD_DIR.resolve():
+        raise HTTPException(status_code=400, detail="Invalid filename.")
+
+    return name
+
+
 @router.post("/upload")
 async def upload_document(file: UploadFile = File(...)):
-    suffix = Path(file.filename).suffix.lower()
+    filename = safe_filename(file.filename)
+
+    suffix = Path(filename).suffix.lower()
     if suffix not in ALLOWED_EXTENSIONS:
         raise HTTPException(
             status_code=400,
@@ -23,20 +43,24 @@ async def upload_document(file: UploadFile = File(...)):
     if len(content) > MAX_FILE_SIZE:
         raise HTTPException(status_code=400, detail="File size exceeds 10MB limit.")
 
-    file_path = UPLOAD_DIR / file.filename
-    file_path.write_bytes(content)
+    file_path = UPLOAD_DIR / filename
 
     try:
-        text = extract_text(file_path)
+        file_path.write_bytes(content)
+
+        text = await run_in_threadpool(extract_text, file_path)
         if not text.strip():
             raise HTTPException(status_code=400, detail="No text could be extracted from the file.")
 
-        chunks = chunk_text(text)
-        embeddings = get_embeddings(chunks)
-        num_chunks = add_vectors(embeddings, chunks, file.filename)
+        chunks = await run_in_threadpool(chunk_text, text)
+        embeddings = await run_in_threadpool(get_embeddings, chunks)
+
+        # Re-uploading a file replaces its vectors instead of indexing it twice
+        remove_document(filename)
+        num_chunks = add_vectors(embeddings, chunks, filename)
 
         return {
-            "filename": file.filename,
+            "filename": filename,
             "chunks": num_chunks,
             "status": "indexed",
         }
@@ -53,6 +77,8 @@ async def list_documents():
 
 @router.delete("/documents/{filename}")
 async def delete_document(filename: str):
+    filename = safe_filename(filename)
+
     file_path = UPLOAD_DIR / filename
     if file_path.exists():
         file_path.unlink()

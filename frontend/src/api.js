@@ -25,3 +25,29 @@ export async function deleteDocument(filename) {
   const response = await api.delete(`/documents/${encodeURIComponent(filename)}`)
   return response.data
 }
+
+// ── AI provider settings ──────────────────────────────────
+export async function getProviders() {
+  const response = await api.get('/providers')
+  return response.data
+}
+
+export async function saveProvider(id, payload) {
+  const response = await api.put(`/providers/${id}`, payload)
+  return response.data
+}
+
+export async function activateProvider(id) {
+  const response = await api.post(`/providers/${id}/activate`)
+  return response.data
+}
+
+export async function testProvider(id) {
+  const response = await api.post(`/providers/${id}/test`)
+  return response.data
+}
+
+export async function deleteProvider(id) {
+  const response = await api.delete(`/providers/${id}`)
+  return response.data
+}
