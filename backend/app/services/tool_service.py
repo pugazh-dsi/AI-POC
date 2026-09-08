@@ -38,6 +38,7 @@ Guidelines:
 - Once you have the tool results, reply in plain readable prose. Do not show raw JSON.
 - Report the values the tools returned exactly. NEVER guess or invent numbers, statistics or facts that a tool did not return.
 - If a tool returns an error, tell the user plainly what failed. Do not fabricate a result to cover for it.
+- Some tools are connected to demonstration systems. When a result contains "demo_data": true, report the figures but make clear they are simulated demo data, not the user's live account.
 - For questions about the user's uploaded documents, use the document tools and cite the source filenames.
 - If no tool fits and you genuinely know the answer, just answer directly.
 """
@@ -65,6 +66,18 @@ async def answer_with_tools(
         return
 
     tools = get_tool_schemas()
+
+    # Every tool switched off in the catalog. Calling a provider with an empty
+    # tools array is rejected, and there is nothing useful to do anyway.
+    if not tools:
+        yield {
+            "type": "text",
+            "content": (
+                "Every tool is currently switched off, so there is nothing I can "
+                "call. Enable at least one under **View all tools** in the sidebar."
+            ),
+        }
+        return
 
     # Prior turns give the model context ("and in London?"), but only plain
     # text — replaying old tool calls would re-execute nothing and only

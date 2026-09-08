@@ -32,6 +32,35 @@ export async function getTools() {
   return response.data
 }
 
+// Switching a tool off removes it from the schemas the model is given, not
+// just from the list — the backend refuses to run a disabled tool.
+export async function setToolEnabled(name, enabled) {
+  const response = await api.patch(`/tools/${encodeURIComponent(name)}`, { enabled })
+  return response.data
+}
+
+// ── Guardrails ────────────────────────────────────────────
+// The rule pack the deterministic engine enforces — the same YAML the backend
+// evaluates, so the "Active Compliance Guardrails" panel can never drift from
+// what is actually running.
+export async function getGuardrailRules() {
+  const response = await api.get('/guardrails/rules')
+  return response.data
+}
+
+export async function getGuardrailSample() {
+  const response = await api.get('/guardrails/sample')
+  return response.data
+}
+
+// Send nothing to validate the reference extraction, `filename` to extract an
+// uploaded document with the LLM first, or `extracted` to score a payload you
+// already have. The verdict is computed in Python either way.
+export async function validateRequisition(payload = {}) {
+  const response = await api.post('/guardrails/validate', payload)
+  return response.data
+}
+
 // ── Chat history ──────────────────────────────────────────
 // Conversations are stored per tile ('rag', 'tools', ...) so each sidebar
 // lists only its own chats.

@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.routers import upload, query, chat, chats, settings, tools
+from app.routers import upload, query, chat, chats, guardrails, settings, tools
 from app.middleware import RateLimitMiddleware
 from app.store.bootstrap import import_legacy_env_keys
 from app.store.chat_store import init_db as init_chat_db
@@ -39,6 +39,7 @@ app.include_router(chat.router, prefix="/api")  # Streaming endpoint for AI SDK
 app.include_router(settings.router, prefix="/api")  # AI provider configuration
 app.include_router(tools.router, prefix="/api")  # Tool Calling tile
 app.include_router(chats.router, prefix="/api")  # Stored conversations
+app.include_router(guardrails.router, prefix="/api")  # Guardrails tile
 
 
 @app.get("/")

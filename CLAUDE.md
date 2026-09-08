@@ -7,8 +7,9 @@ Supports PDF/TXT/DOCX with hallucination prevention and 3-layer prompt injection
 
 **Where the product is going:** a single app with three tiles — **RAG**,
 **Tool Calling**, **Guardrails** — that share one chat shell and differ only in
-the backend pipeline behind them. RAG and Tool Calling ship today; Guardrails is described
-under [Three-Tile Architecture](#three-tile-architecture-target-state).
+the backend pipeline behind them. All three ship today; the Guardrails tile is a
+document-compliance pipeline rather than a chat, described under
+[Three-Tile Architecture](#three-tile-architecture-target-state).
 
 ## Directory Structure (Key Files Only)
 ```
@@ -26,20 +27,32 @@ backend/
 │   │   ├── chat.py                  # POST /chat - SSE stream in AI SDK v4 format
 │   │   ├── tools.py                 # GET /tools (catalog) + POST /tools/chat
 │   │   ├── chats.py                 # Chat history: list / read / rename / delete
+│   │   ├── guardrails.py            # GET /guardrails/rules + POST /guardrails/validate
 │   │   └── settings.py              # Provider config CRUD + activate + live key test
 │   ├── services/
-│   │   ├── document_processor.py    # Parse files + chunk text
+│   │   ├── document_processor.py    # Parse files (incl. tables) + chunk text
 │   │   ├── embedding_service.py     # OpenAI embedding calls (batched)
 │   │   ├── context_builder.py       # Token-budgeted context assembly + count_tokens()
 │   │   ├── qa_service.py            # QA orchestration, non-streaming
 │   │   ├── qa_service_streaming.py  # QA orchestration, streaming (MOST COMPLEX)
 │   │   ├── tool_service.py          # Tool-calling loop (max 4 iterations)
 │   │   ├── chat_history.py          # Persistence tap around every stream
+│   │   ├── guardrails/              # Lab-requisition compliance (Guardrails tile)
+│   │   │   ├── extraction.py        # LAB_REQ_SCHEMA + the extraction prompt - the LLM's ONLY job
+│   │   │   ├── engine.py            # Loads a YAML pack, runs its operators, aggregates the verdict
+│   │   │   └── rules/
+│   │   │       ├── ops.py           # Deterministic operators + the clinical lookup tables
+│   │   │       └── packs/lab_requisition.yaml   # The 5 business rules, declarative
 │   │   ├── tools/
-│   │   │   ├── registry.py          # TOOLS dict - single source of truth for model AND UI
+│   │   │   ├── registry.py          # TOOLS + INTEGRATIONS - single source of truth for model AND UI
 │   │   │   ├── weather.py           # get_weather via Open-Meteo (keyless)
 │   │   │   ├── calculator.py        # AST-sandboxed arithmetic (never eval)
-│   │   │   └── documents.py         # search_documents / list_documents (RAG as a tool)
+│   │   │   ├── documents.py         # search_documents / list_documents (RAG as a tool)
+│   │   │   └── integrations/        # Enterprise connectors - DEMO DATA, real-SDK shapes
+│   │   │       ├── aws.py           # S3 buckets/objects + CloudWatch metrics
+│   │   │       ├── snowflake.py     # list/describe tables + read-only SELECT
+│   │   │       ├── google.py        # Drive search + Calendar events
+│   │   │       └── salesforce.py    # accounts / opportunities / contacts
 │   │   └── providers/
 │   │       ├── __init__.py          # PROVIDER_CATALOG + registry/resolution logic
 │   │       ├── base.py              # ChatProvider ABC, ProviderError, usage_dict()
@@ -64,7 +77,7 @@ frontend/src/
 ├── api.js
 ├── pages/ (LandingPage, RagMode, ToolsMode, PlaceholderMode)
 ├── hooks/useDocumentChat.js         # Wraps AI SDK useChat + owns the tile's chat history
-└── components/ (ChatShell, ChatHistory, DocumentsModal, SettingsPanel, ProviderIcon, FileUpload, ChatWindow, MessageInput)
+└── components/ (ChatShell, ChatHistory, DocumentsModal, ToolsModal, SettingsPanel, ProviderIcon, FileUpload, ChatWindow, MessageInput)
 ```
 
 ## Critical Configuration (`backend/app/config.py`)
@@ -97,7 +110,8 @@ SECRET_KEY_FILE = data/.secret_key      # generated on first run if APP_SECRET_K
 
 ## RAG Pipeline Flow
 ```
-UPLOAD: File → Parse → Chunk (1000 chars, 200 overlap) → Embed (ada-002) → FAISS IndexFlatL2
+UPLOAD: File → Parse (prose + tables as labelled rows) → Chunk (1000 chars, 200 overlap)
+        → Embed (ada-002) → FAISS IndexFlatL2
 QUERY:  Question → Sanitize → Inject detection → Embed → FAISS search → Filter (≤1.8 distance)
         → build_context() token budget → active provider → stream
         └─> If summary query detected: retrieve ALL chunks instead of top-k
@@ -185,7 +199,7 @@ the tiles differ only in which pipeline the chat endpoint runs.
 |------|-------|----------|----------|
 | **RAG** | `/chat` | question → retrieve → LLM → text | `/api/chat` (exists) |
 | **Tool Calling** | `/tools` | question → LLM picks tool → execute → feed result back → LLM → readable text | `/api/tools/chat` (exists) |
-| **Guardrails** | `/guardrails` | question → sanitize → injection check → RAG → output check → text + verdict | `/api/guardrails/chat` (new) |
+| **Guardrails** | `/guardrails` | document → LLM extracts strict JSON → YAML rule pack → deterministic verdict | `/api/guardrails/validate` (exists) |
 
 The landing page with the three tiles is `/`. Unknown paths redirect to `/`.
 
@@ -199,13 +213,16 @@ frontend/src/
 │   ├── LandingPage.jsx      # the three tiles
 │   ├── RagMode.jsx          # sidebar: chat history + recent docs → "View all documents" popup
 │   ├── ToolsMode.jsx        # sidebar: live tool catalog from GET /api/tools
+│   ├── GuardrailsMode.jsx   # NOT the chat shell — guardrail list + validation verdict
 │   └── PlaceholderMode.jsx  # preview for a tile with no backend yet (composer disabled)
 ├── components/
 │   ├── ChatShell.jsx        # shared layout: <aside>{history}{sidebar}{sidebarFooter}</aside> + ChatWindow + MessageInput
 │   ├── ChatHistory.jsx      # new chat / open / rename / delete, in every tile's sidebar
 │   ├── DocumentsModal.jsx   # RAG tile popup: upload + session stats + full index + delete
+│   ├── ToolsModal.jsx       # Tools tile popup: stats + full catalog + params + "Try:" prompts
 │   ├── SettingsPanel.jsx    # provider modal, mounted once in App.jsx (global to all tiles)
-│   └── ToolCallCard.jsx     # renders one tool invocation: name, args, raw result
+│   ├── ToolCallCard.jsx     # renders one tool invocation: name, args, raw result
+│   └── VerdictPanel.jsx     # the /guardrails/validate verdict: Failed / Not evaluable / Passed
 └── hooks/useDocumentChat.js # useDocumentChat({ api }) — defaults to '/api/chat'
 ```
 Routing is `react-router-dom` v7 (`BrowserRouter` in `main.jsx`). Each tile is a
@@ -292,15 +309,21 @@ One dict is the single source of truth: the schemas sent to the model, the
 executor, and the list the UI shows are all derived from it, so the sidebar can
 never claim a tool the model doesn't have.
 
-| Tool | kind | What it does |
-|------|------|--------------|
-| `get_weather` | `api` | Live current weather via Open-Meteo — **keyless**, so the tile demos a real external API without a second key to configure. Two hops: name → coordinates → forecast. |
-| `calculator` | `local` | Arithmetic, **AST-sandboxed** |
-| `search_documents` | `rag` | Semantic FAISS search — same embedding, same `SIMILARITY_THRESHOLD` filter as the RAG tile |
-| `list_documents` | `rag` | Uploaded filenames + chunk counts |
+| Tool | integration | kind | What it does |
+|------|-------------|------|--------------|
+| `get_weather` | core *(hidden)* | `api` | Live current weather via Open-Meteo — **keyless**, so the tile demos a real external API without a second key to configure. Two hops: name → coordinates → forecast. |
+| `calculator` | core *(hidden)* | `local` | Arithmetic, **AST-sandboxed** |
+| `search_documents` | core *(hidden)* | `rag` | Semantic FAISS search — same embedding, same `SIMILARITY_THRESHOLD` filter as the RAG tile |
+| `list_documents` | core *(hidden)* | `rag` | Uploaded filenames + chunk counts |
+| `aws_list_s3_buckets` / `aws_list_s3_objects` / `aws_cloudwatch_metric` | aws | `integration` | S3 inventory and a CloudWatch metric series (min/max/avg) |
+| `snowflake_list_tables` / `snowflake_describe_table` / `snowflake_run_query` | snowflake *(hidden)* | `integration` | Browse the warehouse, then run a **read-only** SELECT |
+| `google_search_drive` / `google_list_calendar_events` | google *(hidden)* | `integration` | Drive files by name/owner/type; upcoming calendar events |
+| `salesforce_search_accounts` / `salesforce_search_opportunities` / `salesforce_get_contact` | salesforce *(hidden)* | `integration` | CRM accounts, pipeline (with weighted value) and contacts |
 
-Adding a tool = one entry (`schema`, `fn`, `label`, `kind`, `example`). `kind`
-drives the UI badge, `example` becomes the clickable "Try:" prompt.
+Adding a tool = one entry (`schema`, `fn`, `label`, `kind`, `integration`,
+`demo`, `example`). `kind` drives the UI badge, `integration` the group it is
+listed under, `demo` the "Demo data" pill, and `example` becomes the clickable
+"Try:" prompt.
 
 🛡️ **`calculator` must never use `eval()`.** The model will pass it arbitrary
 strings straight from the chat box, so an `eval` there is remote code execution
@@ -316,6 +339,78 @@ the model can explain it. A raised exception would drop the SSE stream with no
 the tool-calling system prompt states that results are DATA to report on, never
 commands to obey — a document passage or an API response could otherwise carry an
 injection.
+
+### Integrations (AWS / Snowflake / Google / Salesforce)
+
+`INTEGRATIONS` in `registry.py` groups the catalog: `core` (built-in) plus one
+entry per connected system, each with a `label`, an `icon` slug and a
+description. `GET /api/tools` returns the groups alongside the tools, and
+`IntegrationIcon.jsx` maps the slug to a brand mark — adding an integration
+means one entry in each place; an unknown slug falls back to a plug glyph.
+
+⚠️ **The four enterprise integrations return DEMO DATA.** Every result carries
+`"demo_data": true` and a `note` saying so, and the tool-calling system prompt
+tells the model to report the figures *as simulated*. Without that marker the
+model would present invented S3 sizes and pipeline values as the user's real
+account. Do not remove the flag when wiring a real SDK — remove it only for the
+tools that genuinely went live.
+
+Each function body is the only thing that changes when an integration goes
+live: the schema, the registry entry, the result shape and the UI all stay put.
+The live call each one stands in for is named in its docstring (`boto3`,
+`snowflake-connector-python`, `google-api-python-client`, `simple-salesforce`).
+
+**Only `aws` is live right now.** `core`, `snowflake`, `google` and
+`salesforce` all carry `"hidden": True`, so their tools are not listed in the
+tile, not in the schemas handed to the model, and not runnable — `run_tool()`
+reports them as unknown. `core` is out because the tile demonstrates the
+enterprise integrations and retrieval has its own home on the RAG tile; the
+other three are built, tested and **staged for later**. Every tool stays
+registered in `TOOLS`, so switching one on is flipping its `hidden` flag to
+False — no other change anywhere.
+
+⚠️ With only AWS available, a question aimed at a staged integration ("what's in
+our Salesforce pipeline?") makes the model reach for the closest tool it *does*
+have and report that it found nothing. That is the expected shape of the answer,
+not a bug — turn the group on to answer it properly.
+
+`hidden` is a build-time choice about what the tile demonstrates; the per-tool
+switch below is a runtime one the user flips. Everything downstream is built
+from `visible_tools()` rather than `TOOLS`, so a hidden group cannot leak in
+through the catalog, the schemas or the executor, and `PATCH /api/tools/{name}`
+404s for a tool the UI never showed.
+
+🛡️ **`snowflake_run_query` refuses anything that could write.** The SQL is
+written by the model from a user's sentence, so the guard is in place from the
+start rather than added when the real cursor arrives: the statement must begin
+`SELECT`/`WITH`, may not contain a second statement after a `;`, and is
+rejected if a write keyword (`insert|update|delete|merge|drop|truncate|alter|
+create|grant|revoke|copy|put|remove|call|execute|use`) appears anywhere.
+Verified blocked: `DROP TABLE CUSTOMERS`, `SELECT 1; DROP TABLE CUSTOMERS`,
+`WITH x AS (SELECT 1) DELETE FROM ORDERS`.
+
+### Hiding a tool (enable / disable)
+
+Any *visible* tool can be switched off from the tools popup (a hidden group is
+out of reach — see above). **This is not a display filter** —
+`get_tool_schemas()` returns enabled tools only, so a disabled tool is never
+offered to the model, and `run_tool()` refuses it by name as a second guard (a
+model replaying an older turn could still ask for one).
+
+- State lives in `app_state` under `disabled_tools` (a JSON list of names) in
+  the same `backend/data/app.db`, so it survives a restart.
+- An unparseable value degrades to "nothing disabled", and names of tools that
+  no longer exist are dropped on read — a removed tool cannot leave a stale
+  entry that silently disables a future tool of the same name.
+- `describe_tools()` still lists disabled tools with `enabled: false`, so the
+  UI can offer them back; only the schema list filters them out.
+- With **every** tool off, `tool_service` says so and returns instead of calling
+  the provider — an empty `tools` array is rejected by the OpenAI API.
+
+Frontend: the switch is optimistic (it moves at once and rolls back only if the
+`PATCH` failed), a group header toggles all of its tools in one go, and the
+sidebar's "Connected systems" strip plus the `View all tools (n/N)` button read
+their counts from the same catalog.
 
 ### RAG tile: the documents popup
 
@@ -334,6 +429,26 @@ tile's `handleUploadSuccess` / `handleDelete`, so there is one source of truth:
 the preview, the stats and the popup can never disagree, and opening it costs no
 extra fetch. `FileUpload` takes a `className` prop (default `p-4`) so the modal
 can supply its own spacing.
+
+### Tools tile: the tools popup
+
+The same shape as the RAG documents popup, so both tiles behave identically.
+Everything about the catalog lives in `ToolsModal`: the stats (tools enabled /
+calls made / questions asked), the full list **grouped by integration** with a
+filter once there are more than 5 tools, each tool's expandable parameters, its
+on/off switch, and the clickable **Try:** example (disabled while the tool is
+off). The sidebar names no tool and no integration — it keeps the conversation
+(chat history) and the "How a turn runs" steps — plus one button into the popup
+in `ChatShell`'s `sidebarFooter` slot, labelled **View all tools (n/N)**
+(**View available tools** before the catalog has loaded). The popup is the one
+place the catalog is shown, so the two can never disagree.
+
+`ToolEntry`, `KIND_BADGES` and the `Switch` live in `ToolsModal.jsx`. The modal
+renders from the `tools` / `integrations` state the tile already fetched —
+opening it costs no extra request — and running a **Try:** prompt sends the
+question and closes the popup so the answer is visible straight away. A tool
+whose `integration` the backend didn't describe still renders, under an
+**Other** heading, rather than vanishing.
 
 ### Chat history (BUILT)
 
@@ -377,22 +492,73 @@ Reading history is exempt from the rate limiter (`middleware.py`,
 GET `/api/chats*` only): browsing local SQLite must not consume the budget that
 protects the paid endpoints. Create / rename / delete still count.
 
-### Guardrails tile
-Mostly making the existing defenses *visible*:
-- Sidebar listing the 3 layers with per-layer on/off toggles (**demo only**, default ON)
-- Preset attack buttons ("Ignore all previous instructions…", "Reveal your system prompt")
-- A verdict panel per turn: `Layer 1 pass · Layer 2 BLOCKED (pattern: reveal prompt) · LLM never called`
-- New `guardrail_service.py` returns a **structured verdict** instead of a bare bool
-- Worth adding: an **output-side** check (does the answer leak the system prompt?) — all three layers today are input-side
+### Guardrails tile: lab requisition compliance (BUILT)
 
-Toggles must be gated behind a config flag (`GUARDRAILS_DEMO_MODE`). `/api/chat`
-and `/api/query` keep their defenses hardcoded regardless of the flag.
+A healthcare document goes in; a compliance verdict comes out. The tile exists to
+demonstrate one architectural claim, so the split is enforced in the code layout:
+
+```
+LLM     extraction ONLY — document text in, LAB_REQ_SCHEMA out, null for anything
+        it cannot read. It never decides whether an order is compliant.
+Python  the decision — a declarative YAML rule pack evaluated by deterministic
+        operators. Same payload in, same verdict out, every time.
+```
+
+There is no chat here, so `GuardrailsMode` deliberately does **not** use
+`ChatShell`: the page is the guardrail list plus the verdict panel.
+
+**The schema** (`guardrails/extraction.py`) is the model's whole contract:
+`patient_id`, `patient_name`, `patient_dob`, `gender`, `ordering_physician`,
+`order_date`, `collection_date`, `requested_tests`, `fasting_required`.
+`normalize_extraction()` coerces the model's JSON into real dates / bools and
+drops anything else, so the operators never see a half-parsed value.
+⚠️ `parse_date()` handles ISO **before** falling back to `dateutil(dayfirst=True)`
+— dayfirst reads `2026-09-08` as 9 August.
+
+**The rules** (`guardrails/rules/packs/lab_requisition.yaml`) — policy lives in
+YAML, never in Python `if`s:
+
+| id | Rule | Operator | Fails when |
+|----|------|----------|------------|
+| LR-001 | Mandatory identifiers | `fields_present` | patient_id / patient_name / ordering_physician is null |
+| LR-002 | Age & parental consent | `minor_requires_consent` | age < 18 (relativedelta, never estimated) and no consent form |
+| LR-003 | Timeline integrity | `date_not_before` | collection_date precedes order_date |
+| LR-004 | Gender-specific test match | `gender_test_compatibility` | e.g. PSA for a Female patient, HCG for a Male |
+| LR-005 | Fasting conflict | `fasting_protocol` | a fasting-dependent test with fasting_required = No |
+
+The `display.title` / `display.description` on each rule is the client-facing
+wording the UI renders, so the "Active Compliance Guardrails" list is generated
+from the same file the engine evaluates.
+
+🛡️ **Fail closed.** A null field yields `not_evaluable`, never a pass — the
+document-level status becomes `incomplete` and `blocked: true`. LR-001 is the one
+exception: detecting nulls *is* its job, so a missing identifier is a `fail`.
+`_evaluate_rule()` also turns an operator exception into `not_evaluable`, so a
+broken rule can never look like a pass or take the response down.
+
+The clinical lookup tables (`GENDER_RESTRICTED_TESTS`, `FASTING_DEPENDENT_TESTS`)
+live in `rules/ops.py`; a pack extends them per-rule through `extra_tests` without
+a code change. Matching normalizes test names and reads bracketed abbreviations,
+so "Complete Blood Count (CBC)" matches on either form; single-word keywords must
+match a whole word so `psa` cannot fire on an unrelated string.
+
+**Trying it:** `POST /api/guardrails/validate` with nothing in the body scores the
+stored extraction for `LR-2026-001_Lab_Requisition.docx` (no provider call);
+`{"filename": "..."}` runs the real extraction pass over an uploaded document.
+That reference requisition passes all five rules — edit the payload (a minor's
+DOB, a swapped collection date, a PSA order) to watch each one fire.
+
+**Not built here:** the injection-demo ideas that used to sit in this section —
+per-layer toggles, preset attack buttons, an output-side leak check. The three
+input-side defenses on `/api/chat` and `/api/query` are unchanged; any future
+demo toggle must still be gated behind `GUARDRAILS_DEMO_MODE` and must never
+weaken those endpoints.
 
 ### Build order
 1. ~~Extract `ChatShell` + landing page → RAG tile works immediately~~ **DONE** — landing page, `modes.jsx`, `ChatShell`, `RagMode`, `PlaceholderMode`, per-tile routes; RAG behaviour unchanged
 2. ~~Extract `app/sse.py`; add `stream_tools` to `base.py` (raising default) + OpenAI implementation~~ **DONE**
 3. ~~Tool registry with 4 tools + `/api/tools/chat` + `ToolCallCard`~~ **DONE**
-4. Guardrails router + verdict panel
+4. ~~Guardrails router + verdict panel~~ **DONE** — extraction schema, YAML rule pack, deterministic operators, `/api/guardrails/validate`, `GuardrailsMode` + `VerdictPanel`
 5. Anthropic / Gemini tool support last
 
 **Resolved:** `search_documents` and `list_documents` ARE registered, so the Tools
@@ -445,14 +611,17 @@ f"3:{json.dumps(msg)}\n"         # error
 - `POST /api/providers/{provider}/activate` - switch the active chat provider
 - `POST /api/providers/{provider}/test` - validate credentials with a live call
 - `DELETE /api/providers/{provider}` - remove stored settings
-- `GET /api/tools` - → {count, tools:[{name, label, kind, description, parameters, example}]}
+- `GET /api/tools` - → {count, enabled_count, integrations:[{id, label, icon, description, tool_count, enabled_count, demo}], tools:[{name, label, kind, integration, demo, enabled, description, parameters, example}]}
+- `PATCH /api/tools/{name}` - {enabled} → {tool, enabled_count, integrations} — switches one tool on/off (removes it from the model's schemas, not just the list); 404 for an unknown tool or one in a hidden group
 - `POST /api/tools/chat` - {messages:[...], chatId?} → SSE stream with tool call/result parts
 - `GET /api/chats?mode=rag` - → {count, chats:[{id, mode, title, updated_at, message_count, preview}]}
 - `POST /api/chats` - {mode, title?} → the new chat (titled by its first question)
 - `GET /api/chats/{id}` - → {chat, messages:[{id, role, content, createdAt, annotations, toolInvocations}]}
 - `PATCH /api/chats/{id}` - {title} → rename
 - `DELETE /api/chats/{id}` - → {message, id}
-- *(planned)* `POST /api/guardrails/chat`
+- `GET /api/guardrails/rules` - → the active rule pack {pack, version, title, guardrails:[{id, title, description, severity, operator, fields}], schema:[...]}
+- `GET /api/guardrails/sample` - → the reference extraction for LR-2026-001
+- `POST /api/guardrails/validate` - {extracted?} | {filename?} | {text?} → {source, extraction_source, provider, usage, verdict}; nothing supplied runs the reference payload (no provider call)
 
 ## Troubleshooting Quick Reference
 
@@ -468,10 +637,19 @@ f"3:{json.dumps(msg)}\n"         # error
 | Tool cards don't render | Parts must be `9:` then `a:` with matching `toolCallId`; `useChat` drops unpaired ones |
 | Model answers without calling a tool | Schema `description` is what it selects on — say when to use the tool, not just what it does |
 | Tool loop stops early | `MAX_ITERATIONS = 4` in `tool_service.py` |
+| Model ignores a tool that is listed | It may be switched **off** — the popup shows `Off`; disabled tools are never sent to the model |
+| Weather / calculator / document tools missing from the Tools tile | Deliberate — `INTEGRATIONS["core"]["hidden"] = True`; flip it to False to restore them |
+| Only the AWS tools show up | Deliberate — `snowflake`, `google` and `salesforce` are staged behind `hidden` until they are switched on |
+| "Every tool is currently switched off" | All tools disabled; re-enable one in the tools popup (`disabled_tools` in `app_state`) |
+| Integration numbers look made up | They are — the four enterprise integrations return demo data (`"demo_data": true`); the model is told to say so |
 | Answers stop but UI hangs | The `d:` finish frame was never emitted |
 | Chat not saved | Backend log shows "Chat history..." — the write failed but the answer still streamed; check `backend/data/app.db` is writable |
 | Re-opened chat lost its tool cards | `toolInvocations` are stored on the assistant row — a turn that never finished streaming has none |
 | Sidebar list not updating | `refreshChats()` runs in the hook's `onFinish`; a stream that errored never fires it |
+| Verdict is `incomplete` / `blocked` | A field came back null, so a rule is `not_evaluable` — that is fail-closed working, not a bug; the extracted-fields card shows which |
+| Every guardrail `not_evaluable` | Extraction returned nulls — check the document parse, then compare against `GET /api/guardrails/sample` |
+| "Extraction provider is not ready" | Validating a *document* needs an active provider (Settings); validating the reference payload needs none |
+| A guardrail date is a month out | `parse_date()` must try ISO before `dateutil(dayfirst=True)` |
 
 ## File Modification History (What Changed and Why)
 
@@ -497,6 +675,22 @@ f"3:{json.dumps(msg)}\n"         # error
 - Added remove_document() (user requested deletion)
 - Added SIMILARITY_THRESHOLD filtering in search()
 
+### Table-Aware Extraction (Latest)
+Forms and reports keep their facts in tables, and both parsers used to drop them:
+`_parse_docx` walked `doc.paragraphs` only (a lab requisition indexed as its title
+plus a list of test names), and PyPDF2 flattened grids into ambiguous lines.
+
+- `_parse_docx` now walks the body in **document order** (`_iter_block_items`) so
+  paragraphs and tables interleave as written; nested tables inside a cell are inlined
+- `_parse_pdf` uses **pdfplumber**: table regions are filtered out of the prose and
+  re-emitted as rows, so nothing is duplicated. Falls back to `_parse_pdf_basic`
+  (PyPDF2) if pdfplumber is missing or a file fails to open
+- `_format_rows()` is shared by both, and makes every row **self-describing** —
+  `Patient Name: John Anderson` for 2-column tables, `Test: Hemoglobin | Result: 13.2`
+  for wider grids. ⚠️ This matters because a table can be split across chunks: a bare
+  cell grid embeds "John Anderson" with nothing saying it was a Patient Name
+- `.txt` is unchanged (no tables to recover)
+
 ### AI SDK Migration
 - Frontend: `ai` package, `useDocumentChat` hook, streaming cursor in ChatWindow
 - Backend: `qa_service_streaming.py` + `chat.py` SSE endpoint, all 3 defense layers preserved
@@ -511,6 +705,44 @@ f"3:{json.dumps(msg)}\n"         # error
 - `ChatWindow` empty-state icon is now parameterized (`EmptyIcon` / `emptyAccent`), fed from `mode.accent.gradient`
 - `modes.jsx`: Tool Calling `status: 'live'`, added `accent.gradient` to all three tiles
 
+### Guardrails: Lab Requisition Compliance (Latest)
+- Added `services/guardrails/` — `extraction.py` (LAB_REQ_SCHEMA + extraction prompt
+  + `MOCK_LAB_REQUISITION` for LR-2026-001), `engine.py` (YAML loader, per-rule
+  execution, verdict aggregation), `rules/ops.py` (5 operators + the clinical
+  lookups) and `rules/packs/lab_requisition.yaml` (the 5 business rules)
+- Added `routers/guardrails.py`: `GET /guardrails/rules`, `GET /guardrails/sample`,
+  `POST /guardrails/validate`; registered in `main.py`
+- `requirements.txt`: added `pyyaml` + `python-dateutil`
+- Frontend: new `pages/GuardrailsMode.jsx` (its own layout — no chat shell) and
+  `components/VerdictPanel.jsx`; `api.js` gained `getGuardrailRules()` /
+  `getGuardrailSample()` / `validateRequisition()`; `App.jsx` routes the tile and
+  `modes.jsx` marks it `live` with the extract → rule pack → verdict steps
+
+### Tool Integrations + Hide/Show (Latest)
+- Added `services/tools/integrations/` — `aws.py` (S3 + CloudWatch), `snowflake.py`
+  (list/describe/read-only query), `google.py` (Drive + Calendar), `salesforce.py`
+  (accounts / opportunities / contacts); 11 new tools, all returning demo data
+- `registry.py`: added `INTEGRATIONS`, per-tool `integration` / `demo` fields,
+  `describe_integrations()`, and the enable/disable layer (`disabled_tools()`,
+  `is_enabled()`, `set_tool_enabled()`, `enabled_tools()`) backed by the
+  `disabled_tools` key in `app_state`; `get_tool_schemas()` and `run_tool()` now
+  respect it
+- `routers/tools.py`: `GET /api/tools` returns `enabled_count` + `integrations`;
+  new `PATCH /api/tools/{name}`
+- `tool_service.py`: system prompt tells the model to disclose `demo_data`;
+  returns early when every tool is switched off (an empty `tools` array is a 400)
+- Frontend: new `components/IntegrationIcon.jsx`; `ToolsModal` groups by
+  integration and gained the switches + "Turn all on/off"; `ToolsMode` holds the
+  integration state and toggles optimistically; `api.js` gained `setToolEnabled()`
+- Then: `INTEGRATIONS` gained a `hidden` flag, set on `core`, and everything
+  downstream reads `visible_tools()` instead of `TOOLS` — the built-in tools left
+  the tile entirely (catalog, schemas and executor); `ToolsMode`'s
+  **Connected systems** sidebar strip was removed with it, leaving the popup as
+  the only place the catalog appears
+- Then: `hidden` set on `snowflake`, `google` and `salesforce` too — the tile
+  currently exposes the 3 AWS tools only. The other groups' code, schemas and
+  demo data are unchanged and switch back on one flag at a time.
+
 ### RAG Documents Popup (Latest)
 - Added `components/DocumentsModal.jsx` (Escape / backdrop close, upload, stats,
   filter, delete)
@@ -522,6 +754,14 @@ f"3:{json.dumps(msg)}\n"         # error
 - `ChatWindow.jsx` / `MessageInput.jsx`: transcript and composer share one centred
   `max-w-4xl` column with `px-6 md:px-10 lg:px-16` gutters, so messages no longer
   stretch edge to edge on a wide screen
+
+### Tools Popup (Latest)
+- Added `components/ToolsModal.jsx` (Escape / backdrop close, stats, filter,
+  parameters, "Try:" prompts); `ToolEntry` + `KIND_BADGES` moved there from
+  `ToolsMode.jsx` and exported
+- `ToolsMode.jsx`: the tool list and Session Overview moved out of the sidebar
+  into the popup entirely; the sidebar keeps only chat history, the "How a turn
+  runs" steps and the pinned `sidebarFooter` button that opens the popup
 
 ### Chat History (Latest)
 - Added `store/chat_store.py` (sessions + messages) and `services/chat_history.py`
@@ -557,6 +797,10 @@ f"3:{json.dumps(msg)}\n"         # error
 - Frontend styling, UI text, log messages
 - Adding a model name to `PROVIDER_CATALOG["…"]["models"]`
 - Adding a tool to `TOOLS` (registry.py) — the UI list follows automatically
+- Adding an integration to `INTEGRATIONS` (registry.py) + its slug in `IntegrationIcon.jsx`
+- The `hidden` flag on an INTEGRATIONS group (which groups the Tools tile shows)
+- The demo records inside `services/tools/integrations/*` (they are fixtures, not config)
+- Wording of a rule's `display` block in a guardrails pack (it is what the UI shows)
 
 ### ⚠️ Requires user testing:
 - SIMILARITY_THRESHOLD, TEMPERATURE, TOP_K_RESULTS, CHUNK_SIZE/OVERLAP, MAX_CONTEXT_TOKENS
@@ -567,8 +811,14 @@ f"3:{json.dumps(msg)}\n"         # error
 - System prompt security instructions, input sanitization
 - Anything touching `crypto.py` or key storage/masking
 - `calculator.py`'s AST whitelist — it evaluates attacker-controlled strings
+- `snowflake.py`'s read-only guard — it screens model-written SQL
+- Removing a `demo_data` flag, or the system-prompt line that makes the model
+  disclose it
 - Any new tool that touches the filesystem, network or shell
 - The guardrails demo toggles (must never disable defenses on the real endpoints)
+- A guardrails rule pack's thresholds or operators, and the clinical lookup tables
+  in `guardrails/rules/ops.py` — they decide whether a patient's order is released
+- Anything that would let `not_evaluable` count as a pass (fail closed)
 
 ### 🚫 NEVER change without user approval:
 - Remove prompt injection defenses
@@ -600,7 +850,9 @@ f"3:{json.dumps(msg)}\n"         # error
 - `langchain-text-splitters` - RecursiveCharacterTextSplitter for chunking
 - `tiktoken` - Token counting for the context budget
 - `cryptography` - At-rest encryption for stored API keys
-- `PyPDF2`, `python-docx` - File parsing
+- `pyyaml` - Loads the guardrails rule packs
+- `python-dateutil` - Exact age arithmetic (`relativedelta`) + requisition date parsing
+- `PyPDF2`, `pdfplumber`, `python-docx` - File parsing (pdfplumber adds PDF table extraction)
 - React + Vite + Tailwind + Vercel AI SDK v4 + react-router-dom v7 (frontend)
 
 ## Multi-Provider Chat (Added)

@@ -5,9 +5,12 @@ openai
 faiss-cpu
 langchain-text-splitters
 pypdf2
+pdfplumber
 python-docx
 python-dotenv
 tiktoken>=0.5.0
 anthropic
 google-genai
 cryptography
+pyyaml
+python-dateutil

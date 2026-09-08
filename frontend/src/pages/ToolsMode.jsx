@@ -1,99 +1,33 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import ChatShell from '../components/ChatShell'
 import ChatHistory from '../components/ChatHistory'
-import { getTools } from '../api'
+import ToolsModal from '../components/ToolsModal'
+import { getTools, setToolEnabled } from '../api'
 import { useDocumentChat } from '../hooks/useDocumentChat'
 
 /**
  * Tool Calling tile: the model picks a function, the backend runs it, and the
  * result comes back as prose — with every invocation visible in the transcript.
  *
- * The sidebar lists the tools from GET /api/tools, which is derived from the
- * same registry the model is given, so the UI can never drift from what the
- * model can actually call.
+ * The tool catalog comes from GET /api/tools, which is derived from the same
+ * registry the model is given, so the UI can never drift from what the model
+ * can actually call. Tools are grouped by integration (built-in, AWS,
+ * Snowflake, Google Workspace, Salesforce) and each one can be switched off —
+ * the backend then drops it from the schemas, so the switch removes the
+ * capability, not just the row.
+ *
+ * Everything about the catalog — the stats, the full list, parameters, the
+ * example prompts, the switches — lives in ToolsModal behind the pinned
+ * sidebar button, leaving that column for the conversation itself. The sidebar
+ * names no tool and no integration: the popup is the one place the catalog is
+ * shown, so the two can never disagree.
  */
-
-// One badge per registry `kind`, so a new tool categorises itself.
-const KIND_BADGES = {
-  local: { label: 'Local', className: 'bg-gray-100 text-gray-600 border-gray-200' },
-  api: { label: 'Live API', className: 'bg-blue-50 text-blue-700 border-blue-200' },
-  rag: { label: 'Documents', className: 'bg-violet-50 text-violet-700 border-violet-200' },
-}
-
-function ToolEntry({ tool, onTry }) {
-  const [open, setOpen] = useState(false)
-  const badge = KIND_BADGES[tool.kind] || KIND_BADGES.local
-  const params = Object.entries(tool.parameters?.properties || {})
-  const required = tool.parameters?.required || []
-
-  return (
-    <li className="rounded-lg bg-white border border-gray-200 hover:border-gray-300 transition-all">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="w-full flex items-start gap-2.5 p-3 text-left"
-      >
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="font-mono text-xs font-medium text-gray-900">{tool.name}</span>
-            <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded border ${badge.className}`}>
-              {badge.label}
-            </span>
-          </div>
-          <p className="text-xs text-gray-500 mt-1 line-clamp-2">{tool.description}</p>
-        </div>
-        <svg
-          className={`w-4 h-4 text-gray-400 shrink-0 mt-0.5 transition-transform ${open ? 'rotate-180' : ''}`}
-          fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}
-        >
-          <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
-        </svg>
-      </button>
-
-      {open && (
-        <div className="border-t border-gray-200 px-3 py-2.5 space-y-2.5">
-          <p className="text-xs text-gray-600 leading-relaxed">{tool.description}</p>
-
-          <div>
-            <p className="text-[11px] font-medium text-gray-500 mb-1.5">Parameters</p>
-            {params.length === 0 ? (
-              <p className="text-xs text-gray-400">None</p>
-            ) : (
-              <ul className="space-y-1.5">
-                {params.map(([name, spec]) => (
-                  <li key={name} className="text-xs">
-                    <span className="font-mono text-gray-900">{name}</span>
-                    <span className="text-gray-400"> : {spec.type}</span>
-                    {required.includes(name) && (
-                      <span className="text-[10px] text-red-500 ml-1">required</span>
-                    )}
-                    {spec.description && (
-                      <p className="text-gray-500 mt-0.5 leading-snug">{spec.description}</p>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-
-          {tool.example && (
-            <button
-              type="button"
-              onClick={() => onTry(tool.example)}
-              className="w-full text-left text-xs rounded-md border border-violet-200 bg-violet-50 px-2.5 py-2 text-violet-700 hover:bg-violet-100 transition-colors"
-            >
-              Try: “{tool.example}”
-            </button>
-          )}
-        </div>
-      )}
-    </li>
-  )
-}
-
 export default function ToolsMode({ mode, onOpenSettings, activeProvider }) {
   const [tools, setTools] = useState([])
+  const [integrations, setIntegrations] = useState([])
+  const [pendingTools, setPendingTools] = useState([])
   const [loadError, setLoadError] = useState(false)
+  const [toolsOpen, setToolsOpen] = useState(false)
 
   const {
     messages, isLoading,
@@ -102,13 +36,54 @@ export default function ToolsMode({ mode, onOpenSettings, activeProvider }) {
 
   useEffect(() => {
     getTools()
-      .then((data) => setTools(data.tools || []))
+      .then((data) => {
+        setTools(data.tools || [])
+        setIntegrations(data.integrations || [])
+      })
       .catch(() => setLoadError(true))
   }, [])
 
   const handleSend = (question) => {
     send(question)
   }
+
+  // Optimistic: the switch moves immediately and only rolls back if the write
+  // failed, so toggling a row never feels laggy.
+  const applyEnabled = (names, enabled) => {
+    const wanted = new Set(names)
+    setTools((prev) =>
+      prev.map((t) => (wanted.has(t.name) ? { ...t, enabled } : t))
+    )
+  }
+
+  const toggleTools = async (names, enabled) => {
+    if (names.length === 0) return
+
+    const before = tools
+    applyEnabled(names, enabled)
+    setPendingTools((prev) => [...prev, ...names])
+
+    try {
+      const results = await Promise.all(
+        names.map((name) => setToolEnabled(name, enabled))
+      )
+      // The last response carries the current integration counts.
+      const last = results[results.length - 1]
+      if (last?.integrations) setIntegrations(last.integrations)
+    } catch {
+      setTools(before)
+    } finally {
+      setPendingTools((prev) => prev.filter((n) => !names.includes(n)))
+    }
+  }
+
+  const handleToggle = (name, enabled) => toggleTools([name], enabled)
+  const handleToggleGroup = (names, enabled) => toggleTools(names, enabled)
+
+  const enabledTools = useMemo(
+    () => tools.filter((t) => t.enabled !== false),
+    [tools]
+  )
 
   const lastMeta = [...messages].reverse().find((m) => m.annotations?.[0])?.annotations?.[0]
   const callCount = messages.reduce((n, m) => n + (m.toolInvocations?.length || 0), 0)
@@ -125,43 +100,26 @@ export default function ToolsMode({ mode, onOpenSettings, activeProvider }) {
     />
   )
 
+  // Pinned to the bottom of the sidebar so it stays reachable however long the
+  // chat history grows — the one way into the full catalog.
+  const sidebarFooter = (
+    <button
+      type="button"
+      onClick={() => setToolsOpen(true)}
+      className="w-full inline-flex items-center justify-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 shadow-sm transition-all hover:border-gray-300 hover:bg-gray-50"
+    >
+      <svg className="w-4 h-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M11.42 15.17L17.25 21A2.652 2.652 0 0021 17.25l-5.877-5.877M11.42 15.17l2.496-3.03c.317-.384.74-.626 1.208-.766M11.42 15.17l-4.655 5.653a2.548 2.548 0 11-3.586-3.586l6.837-5.63m5.108-.233c.55-.164 1.163-.188 1.743-.14a4.5 4.5 0 004.486-6.336l-3.276 3.277a3.004 3.004 0 01-2.25-2.25l3.276-3.276a4.5 4.5 0 00-6.336 4.486c.091 1.076-.071 2.264-.904 2.95l-.102.085m-1.745 1.437L5.909 7.5H4.5L2.25 3.75 3.75 2.25 7.5 4.5v1.409l4.26 4.26m-1.745 1.437l1.745-1.437m6.615 8.206L15.75 15.75M4.867 19.125h.008v.008h-.008v-.008z" />
+      </svg>
+      {tools.length === 0
+        ? 'View available tools'
+        : `View all tools (${enabledTools.length}/${tools.length})`}
+    </button>
+  )
+
   const sidebar = (
     <>
-      <div className="px-4 py-4 bg-gray-50 border-b border-gray-200">
-        <h3 className="text-xs font-medium text-gray-500 mb-3">Session Overview</h3>
-        <div className="grid grid-cols-2 gap-3">
-          <div className="bg-white rounded-lg p-3 border border-gray-200 shadow-sm">
-            <p className="text-xs text-gray-500 mb-1">Tools</p>
-            <p className="text-2xl font-semibold text-gray-900">{tools.length}</p>
-          </div>
-          <div className="bg-white rounded-lg p-3 border border-gray-200 shadow-sm">
-            <p className="text-xs text-gray-500 mb-1">Calls made</p>
-            <p className="text-2xl font-semibold text-gray-900">{callCount}</p>
-          </div>
-        </div>
-      </div>
-
       <div className="px-4 py-4">
-        <h2 className="text-xs font-medium text-gray-500 mb-3">
-          Available tools ({tools.length})
-        </h2>
-
-        {loadError ? (
-          <p className="text-sm text-gray-400">
-            Could not load the tool list. Is the backend running?
-          </p>
-        ) : tools.length === 0 ? (
-          <p className="text-sm text-gray-400">Loading tools…</p>
-        ) : (
-          <ul className="space-y-2">
-            {tools.map((tool) => (
-              <ToolEntry key={tool.name} tool={tool} onTry={handleSend} />
-            ))}
-          </ul>
-        )}
-      </div>
-
-      <div className="px-4 pb-4">
         <h3 className="text-xs font-medium text-gray-500 mb-2">How a turn runs</h3>
         <ol className="space-y-2">
           {mode.steps.map((step, i) => (
@@ -185,25 +143,42 @@ export default function ToolsMode({ mode, onOpenSettings, activeProvider }) {
   )
 
   return (
-    <ChatShell
-      mode={mode}
-      onOpenSettings={onOpenSettings}
-      activeProvider={activeProvider}
-      history={history}
-      sidebar={sidebar}
-      messages={messages}
-      isStreaming={isLoading}
-      onSend={handleSend}
-      placeholder="Ask something that needs a tool…"
-      emptyTitle="Ask a question that needs a tool"
-      emptyText="The model decides which function to call, the backend runs it, and you see the call, its arguments and the raw result before the written answer."
-      footer={
-        lastMeta?.provider
-          ? `Answered by ${lastMeta.provider} • ${lastMeta.model}${
-              lastMeta.tools_used?.length ? ` • called ${lastMeta.tools_used.join(', ')}` : ' • no tool needed'
-            }`
-          : `${tools.length} tools available • provider configured under Settings`
-      }
-    />
+    <>
+      <ChatShell
+        mode={mode}
+        onOpenSettings={onOpenSettings}
+        activeProvider={activeProvider}
+        history={history}
+        sidebar={sidebar}
+        sidebarFooter={sidebarFooter}
+        messages={messages}
+        isStreaming={isLoading}
+        onSend={handleSend}
+        placeholder="Ask something that needs a tool…"
+        emptyTitle="Ask a question that needs a tool"
+        emptyText="The model decides which function to call, the backend runs it, and you see the call, its arguments and the raw result before the written answer."
+        footer={
+          lastMeta?.provider
+            ? `Answered by ${lastMeta.provider} • ${lastMeta.model}${
+                lastMeta.tools_used?.length ? ` • called ${lastMeta.tools_used.join(', ')}` : ' • no tool needed'
+              }`
+            : `${enabledTools.length} tools available across ${integrations.length} integrations • provider configured under Settings`
+        }
+      />
+
+      <ToolsModal
+        open={toolsOpen}
+        tools={tools}
+        integrations={integrations}
+        callCount={callCount}
+        messageCount={messages.filter((m) => m.role === 'user').length}
+        loadError={loadError}
+        pendingTools={pendingTools}
+        onClose={() => setToolsOpen(false)}
+        onTry={handleSend}
+        onToggle={handleToggle}
+        onToggleGroup={handleToggleGroup}
+      />
+    </>
   )
 }

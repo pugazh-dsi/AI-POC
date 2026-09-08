@@ -76,12 +76,12 @@ export const MODES = [
     id: 'guardrails',
     path: '/guardrails',
     title: 'Guardrails',
-    tagline: 'Watch the defenses block an attack',
+    tagline: 'Compliance decided in Python, not by the model',
     description:
-      'Fire prompt-injection attempts at the same pipeline and see which layer catches them: input sanitization, pattern detection, or the hardened system prompt. Blocked requests never reach the model.',
-    status: 'planned',
-    endpoint: '/api/guardrails/chat',
-    steps: ['Sanitize input', 'Detect injection', 'Hardened prompt + verdict'],
+      'A healthcare lab requisition is read by the model into a strict JSON schema — extraction only. A declarative YAML rule pack, evaluated by deterministic Python operators, then decides whether the order is compliant, and holds it when a field is missing.',
+    status: 'live',
+    endpoint: '/api/guardrails/validate',
+    steps: ['Extract to strict JSON', 'Evaluate the YAML rule pack', 'Deterministic verdict'],
     accent: {
       icon: 'bg-green-600',
       iconSoft: 'bg-green-50 text-green-700',

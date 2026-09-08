@@ -15,7 +15,7 @@ from pydantic import BaseModel
 from app.sanitizer import sanitize_question, detect_injection
 from app.services.chat_history import ensure_session, record_stream, save_message
 from app.services.tool_service import answer_with_tools
-from app.services.tools import describe_tools
+from app.services.tools import describe_integrations, describe_tools, set_tool_enabled
 from app.sse import format_sse_stream, finish_part, text_part
 
 router = APIRouter()
@@ -32,6 +32,10 @@ class Message(BaseModel):
     content: str
 
 
+class ToolToggleRequest(BaseModel):
+    enabled: bool
+
+
 class ToolChatRequest(BaseModel):
     messages: List[Message]
     # The stored conversation this turn belongs to; a new one is opened when
@@ -41,9 +45,40 @@ class ToolChatRequest(BaseModel):
 
 @router.get("/tools")
 async def list_tools():
-    """The tool catalog the model is given, for the UI to display."""
+    """The tool catalog the model is given, for the UI to display.
+
+    Every tool is listed, including switched-off ones (`enabled: False`) so the
+    UI can offer them back — only `get_tool_schemas()` filters those out before
+    the model sees them. `integrations` is the grouping the tile renders.
+    """
     tools = describe_tools()
-    return {"count": len(tools), "tools": tools}
+    return {
+        "count": len(tools),
+        "enabled_count": len([t for t in tools if t["enabled"]]),
+        "integrations": describe_integrations(),
+        "tools": tools,
+    }
+
+
+@router.patch("/tools/{name}")
+async def toggle_tool(name: str, request: ToolToggleRequest):
+    """Switch one tool on or off.
+
+    Disabling genuinely removes the capability: the tool is dropped from the
+    schemas handed to the model and `run_tool()` refuses it, so this is not a
+    display-only filter.
+    """
+    if not set_tool_enabled(name, request.enabled):
+        raise HTTPException(status_code=404, detail=f"Unknown tool: {name}")
+
+    tools = describe_tools()
+    updated = next(t for t in tools if t["name"] == name)
+
+    return {
+        "tool": updated,
+        "enabled_count": len([t for t in tools if t["enabled"]]),
+        "integrations": describe_integrations(),
+    }
 
 
 @router.post("/tools/chat")

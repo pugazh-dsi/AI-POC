@@ -1,0 +1,140 @@
+# Lab requisition compliance rule pack.
+#
+# This file is the policy. The LLM never sees it — it only fills the extraction
+# schema (services/guardrails/extraction.py); every decision below is taken by
+# the deterministic operators in rules/ops.py, so a verdict can always be traced
+# to a rule id here.
+#
+# Each rule:
+#   id / name / severity  identity of the rule in the verdict
+#   display               the client-facing wording, rendered by the UI
+#   op / args             which operator in ops.py runs, and with what
+#   remediation           what to do when it fails
+#   fields                the extracted fields the rule reads (shown in the UI)
+#
+# Statuses an operator can return: pass, fail, not_evaluable. A rule that cannot
+# be evaluated fails closed — the requisition is held, never waved through.
+
+pack: lab_requisition
+version: 1
+title: Healthcare Lab Requisition Compliance
+description: >-
+  Deterministic compliance checks applied to every extracted lab requisition
+  before it is released to the laboratory information system.
+document_type: Lab Requisition
+blocking_severities: [critical, high]
+
+rules:
+  - id: LR-001
+    name: Mandatory Identifiers
+    severity: critical
+    category: identity
+    display:
+      title: Identity Verification
+      description: >-
+        Ensures critical identifiers (Patient ID, Name, Physician) are
+        completely extracted before processing.
+    rationale: >-
+      A specimen that cannot be tied to a patient and an ordering physician
+      cannot be resulted, and is a reportable identification error.
+    op: fields_present
+    fields: [patient_id, patient_name, ordering_physician]
+    args:
+      fields:
+        - patient_id
+        - patient_name
+        - ordering_physician
+    remediation: >-
+      Return the requisition to the ordering department for the missing
+      identifier(s) before the specimen is accessioned.
+
+  - id: LR-002
+    name: Age and Parental Consent
+    severity: high
+    category: consent
+    display:
+      title: Minor Consent Protocol
+      description: >-
+        Calculates exact patient age and halts processing if parental consent
+        documentation is missing for minors.
+    rationale: >-
+      Testing a patient under 18 without a countersigned parental consent form
+      is a consent violation regardless of the clinical indication.
+    op: minor_requires_consent
+    fields: [patient_dob, parental_consent_on_file]
+    args:
+      dob_field: patient_dob
+      consent_field: parental_consent_on_file
+      minimum_age: 18
+    remediation: >-
+      Attach the signed parental/guardian consent form, or confirm the date of
+      birth if it was mis-transcribed.
+
+  - id: LR-003
+    name: Timeline Integrity
+    severity: high
+    category: chronology
+    display:
+      title: Chronological Validation
+      description: >-
+        Prevents processing of specimens where the collection date predates the
+        physician's order date.
+    rationale: >-
+      A specimen collected before the order existed was not collected under that
+      order, so the result cannot be attributed to it.
+    op: date_not_before
+    fields: [collection_date, order_date]
+    args:
+      field: collection_date
+      not_before: order_date
+    remediation: >-
+      Verify the collection and order dates against the source document; recollect
+      the specimen if the sequence is genuinely inverted.
+
+  - id: LR-004
+    name: Gender-Specific Test Match
+    severity: critical
+    category: clinical
+    display:
+      title: Biological Compatibility
+      description: >-
+        Cross-references patient gender with requested test panels to prevent
+        logically impossible lab orders (e.g., PSA tests for female patients).
+    rationale: >-
+      A biologically impossible order is usually a wrong-patient or wrong-test
+      selection, and running it consumes the specimen without producing a usable
+      result.
+    op: gender_test_compatibility
+    fields: [gender, requested_tests]
+    args:
+      gender_field: gender
+      tests_field: requested_tests
+      # The clinical table lives in ops.py (GENDER_RESTRICTED_TESTS); a pack can
+      # extend it here without a code change.
+      extra_tests: []
+    remediation: >-
+      Confirm the patient's identity and gender with the ordering physician, then
+      correct either the gender field or the requested panel.
+
+  - id: LR-005
+    name: Fasting Protocol Conflict
+    severity: medium
+    category: protocol
+    display:
+      title: Pre-Test Protocol Check
+      description: >-
+        Verifies fasting status against the specific requirements of the
+        requested test panels to prevent invalid lab results.
+    rationale: >-
+      A lipid or fasting-glucose result drawn on a non-fasting specimen is not
+      clinically interpretable and has to be recollected.
+    op: fasting_protocol
+    fields: [fasting_required, requested_tests]
+    args:
+      fasting_field: fasting_required
+      tests_field: requested_tests
+      # Extends FASTING_DEPENDENT_TESTS in ops.py.
+      extra_tests: []
+    remediation: >-
+      Reschedule the draw with fasting instructions, or drop the fasting-dependent
+      test from the panel.

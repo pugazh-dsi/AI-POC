@@ -3,6 +3,7 @@ import { Navigate, Route, Routes } from 'react-router-dom'
 import LandingPage from './pages/LandingPage'
 import RagMode from './pages/RagMode'
 import ToolsMode from './pages/ToolsMode'
+import GuardrailsMode from './pages/GuardrailsMode'
 import PlaceholderMode from './pages/PlaceholderMode'
 import SettingsPanel from './components/SettingsPanel'
 import { MODES } from './modes'
@@ -13,7 +14,7 @@ import { getProviders } from './api'
  *   /            landing page with the three tiles
  *   /chat        RAG
  *   /tools       Tool Calling
- *   /guardrails  Guardrails     (pipeline not built yet)
+ *   /guardrails  Guardrails
  *
  * Paths live on the mode itself (modes.jsx), so adding a tile means adding one
  * registry entry. Provider settings are global, so the panel is mounted here,
@@ -47,6 +48,8 @@ export default function App() {
                 <RagMode mode={mode} onOpenSettings={openSettings} activeProvider={activeProvider} />
               ) : mode.id === 'tools' ? (
                 <ToolsMode mode={mode} onOpenSettings={openSettings} activeProvider={activeProvider} />
+              ) : mode.id === 'guardrails' ? (
+                <GuardrailsMode mode={mode} onOpenSettings={openSettings} activeProvider={activeProvider} />
               ) : (
                 <PlaceholderMode mode={mode} onOpenSettings={openSettings} activeProvider={activeProvider} />
               )
