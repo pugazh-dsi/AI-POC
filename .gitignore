@@ -1,0 +1,53 @@
+# ── Python ────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.pyo
+venv/
+.venv/
+env/
+
+# ── Environment / Secrets ─────────────────────────────────
+.env
+.env.*
+!.env.example
+
+# ── Backend runtime data ──────────────────────────────────
+backend/uploads/
+backend/faiss_index/
+
+# ── Frontend ──────────────────────────────────────────────
+frontend/node_modules/
+frontend/dist/
+frontend/dist-ssr/
+*.local
+
+# ── Logs ──────────────────────────────────────────────────
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ── OS / Editor ───────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.suo
+*.sw?
+
+# ── Self-learning & project write-up docs ─────────────────
+LEARNING.md
+DEMO_GUIDE.md
+EXECUTIVE_SUMMARY.md
+PROJECT_REPORT.md
+
+# ── Claude skill development folders ─────────────────────
+my-skill/
+skill-creator/
+frontend-design/
+
+# ── Keep .claude/ and CLAUDE.md ───────────────────────────
+# (no ignore rules for these - they are committed intentionally)

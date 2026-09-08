@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls:*)",
+      "Bash(npm create:*)",
+      "Bash(npm install:*)",
+      "Bash(npm run build:*)",
+      "Bash(find:*)",
+      "Bash(python -m app.routers.chat:*)",
+      "Bash(python3:*)",
+      "Bash(pgrep:*)",
+      "Bash(kill:*)",
+      "Bash(curl:*)",
+      "Bash(pkill:*)",
+      "Bash(npx claude-code-templates@latest --agent=web-tools/expert-react-frontend-engineer --yes)",
+      "WebFetch(domain:haystack.deepset.ai)",
+      "Bash(git init:*)",
+      "Bash(git add:*)"
+    ]
+  }
+}

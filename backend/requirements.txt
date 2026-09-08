@@ -1,0 +1,10 @@
+fastapi
+uvicorn[standard]
+python-multipart
+openai
+faiss-cpu
+langchain-text-splitters
+pypdf2
+python-docx
+python-dotenv
+tiktoken>=0.5.0
