@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import VerdictPanel from '../components/VerdictPanel'
+import FileUpload from '../components/FileUpload'
 import { ProviderBadge } from '../components/ProviderIcon'
 import { getDocuments, getGuardrailRules, validateRequisition } from '../api'
 
@@ -94,6 +95,15 @@ export default function GuardrailsMode({ mode, onOpenSettings, activeProvider })
     () => (pack?.schema?.length ? pack.schema.map((f) => f.field) : Object.keys(extracted || {})),
     [pack, extracted]
   )
+
+  const handleUploadSuccess = (result) => {
+    setDocuments((prev) => {
+      const next = prev.filter((d) => d.filename !== result.filename)
+      next.push({ filename: result.filename, chunks: result.chunks })
+      return next
+    })
+    setSource(result.filename)
+  }
 
   async function runValidation() {
     setLoading(true)
@@ -271,7 +281,12 @@ export default function GuardrailsMode({ mode, onOpenSettings, activeProvider })
           {/* Choose what to validate, then run the pipeline. */}
           <section className="rounded-xl border border-gray-200 bg-white shadow-sm p-5">
             <h3 className="text-sm font-semibold text-gray-900">Validate a requisition</h3>
-            <div className="mt-3 flex flex-col sm:flex-row gap-3">
+
+            <div className="mt-3 rounded-lg border border-dashed border-gray-300 bg-gray-50 p-3">
+              <FileUpload onUploadSuccess={handleUploadSuccess} className="" />
+            </div>
+
+            <div className="mt-4 flex flex-col sm:flex-row gap-3">
               <select
                 value={source}
                 onChange={(e) => setSource(e.target.value)}

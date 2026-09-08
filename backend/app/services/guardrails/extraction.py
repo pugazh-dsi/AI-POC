@@ -171,8 +171,11 @@ def normalize_extraction(raw: Dict[str, Any]) -> Dict[str, Any]:
     Unknown keys are dropped and missing keys become None, so the rule engine
     always sees exactly LAB_REQ_SCHEMA's fields — plus `parental_consent_on_file`,
     which the requisition form itself does not carry (see the minor-consent rule).
+
+    Malformed payloads fail closed: a non-dict value is treated the same as an
+    empty extraction, so the downstream rules can evaluate it without crashing.
     """
-    raw = raw or {}
+    raw = raw if isinstance(raw, dict) else {}
     normalized: Dict[str, Any] = {}
 
     for field, kind in LAB_REQ_SCHEMA.items():
