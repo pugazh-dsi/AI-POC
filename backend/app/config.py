@@ -19,10 +19,16 @@ DATA_DIR.mkdir(exist_ok=True)
 DATABASE_FILE = DATA_DIR / "app.db"
 SECRET_KEY_FILE = DATA_DIR / ".secret_key"
 
-# Env keys act as a fallback when a provider has no key saved in the database
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "") or os.getenv("GOOGLE_API_KEY", "")
+# Provider API keys are NOT read from the environment at runtime. They live
+# encrypted in DATABASE_FILE and are managed through the Settings UI, so exactly
+# one provider is active and the key never sits in a plaintext .env.
+# The names below are read ONCE by app/store/bootstrap.py, which copies a legacy
+# .env key into the database on first start and then never looks again.
+LEGACY_ENV_KEYS = {
+    "openai": ("OPENAI_API_KEY",),
+    "anthropic": ("ANTHROPIC_API_KEY",),
+    "gemini": ("GEMINI_API_KEY", "GOOGLE_API_KEY"),
+}
 
 # Optional master key for encrypting stored API keys. Generated on first run and
 # written to SECRET_KEY_FILE when unset.

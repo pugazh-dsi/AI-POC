@@ -141,16 +141,17 @@ def delete_provider(provider: str) -> bool:
     return changed > 0
 
 
-def get_active_provider() -> str:
+def get_state(key: str, default: str = "") -> str:
+    """Read one app_state row. Used for the active provider and setup flags."""
     with _connect() as conn:
         conn.executescript(SCHEMA)
         row = conn.execute(
-            "SELECT value FROM app_state WHERE key = ?", (ACTIVE_PROVIDER_KEY,)
+            "SELECT value FROM app_state WHERE key = ?", (key,)
         ).fetchone()
-    return row["value"] if row else DEFAULT_CHAT_PROVIDER
+    return row["value"] if row else default
 
 
-def set_active_provider(provider: str) -> None:
+def set_state(key: str, value: str) -> None:
     with _connect() as conn:
         conn.executescript(SCHEMA)
         conn.execute(
@@ -158,5 +159,14 @@ def set_active_provider(provider: str) -> None:
             INSERT INTO app_state (key, value) VALUES (?, ?)
             ON CONFLICT(key) DO UPDATE SET value = excluded.value
             """,
-            (ACTIVE_PROVIDER_KEY, provider),
+            (key, value),
         )
+
+
+def get_active_provider() -> str:
+    """The single provider chat runs on. Exactly one is active at any time."""
+    return get_state(ACTIVE_PROVIDER_KEY, DEFAULT_CHAT_PROVIDER)
+
+
+def set_active_provider(provider: str) -> None:
+    set_state(ACTIVE_PROVIDER_KEY, provider)

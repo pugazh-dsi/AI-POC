@@ -5,7 +5,7 @@ import ChatShell from '../components/ChatShell'
  * shell as a live mode so the layout is already proven, but the composer stays
  * disabled — there is no endpoint behind it to call.
  */
-export default function PlaceholderMode({ mode, onOpenSettings }) {
+export default function PlaceholderMode({ mode, onOpenSettings, activeProvider }) {
   const sidebar = (
     <div className="p-4 space-y-4">
       <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
@@ -45,6 +45,7 @@ export default function PlaceholderMode({ mode, onOpenSettings }) {
     <ChatShell
       mode={mode}
       onOpenSettings={onOpenSettings}
+      activeProvider={activeProvider}
       sidebar={sidebar}
       messages={[]}
       isStreaming={false}

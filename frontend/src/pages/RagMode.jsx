@@ -8,7 +8,7 @@ import { useDocumentChat } from '../hooks/useDocumentChat'
  * RAG tile: upload documents, ask questions, get answers cited back to the
  * passages the model actually saw. This is the pipeline that ships today.
  */
-export default function RagMode({ mode, onOpenSettings }) {
+export default function RagMode({ mode, onOpenSettings, activeProvider }) {
   const [documents, setDocuments] = useState([])
 
   const { messages, append, isLoading, addSystemMessage } = useDocumentChat({
@@ -111,6 +111,7 @@ export default function RagMode({ mode, onOpenSettings }) {
     <ChatShell
       mode={mode}
       onOpenSettings={onOpenSettings}
+      activeProvider={activeProvider}
       sidebar={sidebar}
       messages={messages}
       isStreaming={isLoading}

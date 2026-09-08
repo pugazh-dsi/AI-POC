@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { ProviderBadge } from './ProviderIcon'
 import {
   getProviders,
   saveProvider,
@@ -25,11 +26,13 @@ export default function SettingsPanel({ open, onClose, onActiveChange }) {
   const [busy, setBusy] = useState('')
   const [status, setStatus] = useState({})
 
+  const active = providers.find((p) => p.is_active && p.configured)
+
   const load = async () => {
     try {
       const data = await getProviders()
       setProviders(data.providers)
-      onActiveChange?.(data.providers.find((p) => p.is_active))
+      onActiveChange?.(data.providers.find((p) => p.is_active && p.configured) || null)
     } catch {
       setStatus({ _global: { type: 'error', text: 'Could not load provider settings.' } })
     }
@@ -99,9 +102,9 @@ export default function SettingsPanel({ open, onClose, onActiveChange }) {
       <div className="bg-white rounded-xl shadow-xl w-full max-w-2xl max-h-[85vh] flex flex-col">
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
           <div>
-            <h2 className="text-lg font-semibold text-gray-900">AI Providers</h2>
+            <h2 className="text-lg font-semibold text-gray-900">Integrations</h2>
             <p className="text-xs text-gray-500">
-              Keys are stored encrypted in this app&apos;s local database.
+              Keys are stored encrypted in this app&apos;s local database — never in .env.
             </p>
           </div>
           <button
@@ -116,10 +119,29 @@ export default function SettingsPanel({ open, onClose, onActiveChange }) {
         </div>
 
         <div className="flex-1 overflow-y-auto p-6 space-y-4">
+          {active ? (
+            <div className="flex items-center gap-3 rounded-lg border border-gray-200 bg-gray-50 p-3">
+              <ProviderBadge icon={active.icon} />
+              <div className="min-w-0">
+                <p className="text-xs text-gray-500">Active for chat</p>
+                <p className="text-sm font-medium text-gray-900 truncate">
+                  {active.label}
+                  <span className="text-gray-400 font-normal"> · {active.model}</span>
+                </p>
+              </div>
+            </div>
+          ) : (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
+              <p className="text-xs text-amber-800">
+                No provider is active yet. Add a key below and choose “Use for chat”.
+              </p>
+            </div>
+          )}
+
           <div className="rounded-lg bg-blue-50 border border-blue-200 p-3">
             <p className="text-xs text-blue-800">
-              Document search always uses OpenAI embeddings, so an OpenAI key is required
-              even when chat runs on another provider.
+              Exactly one provider runs chat at a time. Document search always uses OpenAI
+              embeddings, so an OpenAI key is required even when chat runs elsewhere.
             </p>
           </div>
 
@@ -134,22 +156,24 @@ export default function SettingsPanel({ open, onClose, onActiveChange }) {
                   p.is_active ? 'border-blue-400 bg-blue-50/40' : 'border-gray-200 bg-white'
                 }`}
               >
-                <div className="flex items-center justify-between mb-3">
-                  <div>
-                    <div className="flex items-center gap-2">
+                <div className="flex items-start gap-3 mb-3">
+                  <ProviderBadge icon={p.icon} />
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
                       <h3 className="font-medium text-gray-900">{p.label}</h3>
-                      {p.is_active && (
+                      {p.is_active ? (
                         <span className="text-xs font-medium text-blue-700 bg-blue-100 px-2 py-0.5 rounded-full">
                           Active
                         </span>
+                      ) : (
+                        p.configured && (
+                          <span className="text-xs font-medium text-gray-600 bg-gray-100 px-2 py-0.5 rounded-full">
+                            Connected
+                          </span>
+                        )
                       )}
                       {p.configured && (
-                        <span className="text-xs text-gray-500">{p.masked_key}</span>
-                      )}
-                      {p.key_from_env && (
-                        <span className="text-xs text-amber-700 bg-amber-100 px-2 py-0.5 rounded-full">
-                          from .env
-                        </span>
+                        <span className="text-xs font-mono text-gray-400">{p.masked_key}</span>
                       )}
                     </div>
                     <p className="text-xs text-gray-500 mt-0.5">{p.notes}</p>

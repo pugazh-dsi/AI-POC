@@ -26,6 +26,12 @@ export async function deleteDocument(filename) {
   return response.data
 }
 
+// ── Tool calling ──────────────────────────────────────────
+export async function getTools() {
+  const response = await api.get('/tools')
+  return response.data
+}
+
 // ── AI provider settings ──────────────────────────────────
 export async function getProviders() {
   const response = await api.get('/providers')

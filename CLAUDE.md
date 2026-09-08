@@ -7,7 +7,7 @@ Supports PDF/TXT/DOCX with hallucination prevention and 3-layer prompt injection
 
 **Where the product is going:** a single app with three tiles — **RAG**,
 **Tool Calling**, **Guardrails** — that share one chat shell and differ only in
-the backend pipeline behind them. RAG ships today; the other two are described
+the backend pipeline behind them. RAG and Tool Calling ship today; Guardrails is described
 under [Three-Tile Architecture](#three-tile-architecture-target-state).
 
 ## Directory Structure (Key Files Only)
@@ -18,11 +18,13 @@ backend/
 │   ├── config.py                    # ALL configuration (CRITICAL - tuned values)
 │   ├── crypto.py                    # Encrypt/decrypt stored API keys + mask() for display
 │   ├── sanitizer.py                 # Injection defense layers 1 & 2
+│   ├── sse.py                       # AI SDK v4 part formatter, shared by every pipeline
 │   ├── middleware.py                # Rate limiting
 │   ├── routers/
 │   │   ├── upload.py                # POST /upload, GET /documents, DELETE /documents/{name}
 │   │   ├── query.py                 # POST /query (legacy, non-streaming)
 │   │   ├── chat.py                  # POST /chat - SSE stream in AI SDK v4 format
+│   │   ├── tools.py                 # GET /tools (catalog) + POST /tools/chat
 │   │   └── settings.py              # Provider config CRUD + activate + live key test
 │   ├── services/
 │   │   ├── document_processor.py    # Parse files + chunk text
@@ -30,6 +32,12 @@ backend/
 │   │   ├── context_builder.py       # Token-budgeted context assembly + count_tokens()
 │   │   ├── qa_service.py            # QA orchestration, non-streaming
 │   │   ├── qa_service_streaming.py  # QA orchestration, streaming (MOST COMPLEX)
+│   │   ├── tool_service.py          # Tool-calling loop (max 4 iterations)
+│   │   ├── tools/
+│   │   │   ├── registry.py          # TOOLS dict - single source of truth for model AND UI
+│   │   │   ├── weather.py           # get_weather via Open-Meteo (keyless)
+│   │   │   ├── calculator.py        # AST-sandboxed arithmetic (never eval)
+│   │   │   └── documents.py         # search_documents / list_documents (RAG as a tool)
 │   │   └── providers/
 │   │       ├── __init__.py          # PROVIDER_CATALOG + registry/resolution logic
 │   │       ├── base.py              # ChatProvider ABC, ProviderError, usage_dict()
@@ -38,29 +46,22 @@ backend/
 │   │       └── gemini_provider.py
 │   └── store/
 │       ├── vector_store.py          # FAISS index management
-│       └── settings_store.py        # SQLite: provider settings + active provider
-├── data/                            # app.db (encrypted keys) + .secret_key  [gitignored]
-├── crypto.py                        # Fernet encryption for stored API keys
-│   ├── services/providers/          # Multi-provider chat connectors
-│   │   ├── base.py                  # ChatProvider interface
-│   │   ├── openai_provider.py       # OpenAI + Azure OpenAI
-│   │   ├── anthropic_provider.py    # Claude
-│   │   └── gemini_provider.py       # Google Gemini
-│   ├── store/settings_store.py      # SQLite: provider config + encrypted keys
+│       ├── settings_store.py        # SQLite: provider settings + THE one active provider
+│       └── bootstrap.py             # ONE-TIME import of legacy .env keys into the DB
 ├── data/                            # Local app DB (runtime, gitignored)
-│   ├── app.db
+│   ├── app.db                       # provider settings + encrypted keys
 │   └── .secret_key                  # Master key, 0600
 ├── uploads/                         # Uploaded files (runtime)
 ├── faiss_index/                     # index.faiss + metadata.json (runtime)
-└── .env                             # Optional API keys (fallback when DB has none)
+└── .env.example                     # No keys — documents the optional APP_SECRET_KEY only
 
 frontend/src/
 ├── App.jsx                          # Tile router: null | 'rag' | 'tools' | 'guardrails'
 ├── modes.jsx                        # The three tiles' metadata (see Three-Tile Architecture)
 ├── api.js
-├── pages/ (LandingPage, RagMode, PlaceholderMode)
+├── pages/ (LandingPage, RagMode, ToolsMode, PlaceholderMode)
 ├── hooks/useDocumentChat.js         # Wraps AI SDK useChat, endpoint is a parameter
-└── components/ (ChatShell, SettingsPanel, FileUpload, ChatWindow, MessageInput)
+└── components/ (ChatShell, SettingsPanel, ProviderIcon, FileUpload, ChatWindow, MessageInput)
 ```
 
 ## Critical Configuration (`backend/app/config.py`)
@@ -109,8 +110,12 @@ the entire index.
 - `PROVIDER_CATALOG` (providers/__init__.py) describes each provider's required
   fields and suggested models. `model` is always free text so a newer model works
   without a code change.
-- Key resolution order: **SQLite (encrypted) → environment variable**. Keys are
-  never returned to the client, only a mask like `sk-...b3f9`.
+- Key resolution: **SQLite (encrypted), and nothing else**. Nothing on the request
+  path reads `OPENAI_API_KEY` & co. Keys are never returned to the client, only a
+  mask like `sk-...b3f9`.
+- **Exactly one provider is active** at a time (`app_state.active_chat_provider`).
+  Activating requires a stored key; deleting the active provider hands "active" to
+  another configured one so chat never points at a keyless provider.
 - `base.py` contract: `complete(system, user)` and `stream(system, user)`, both
   receiving the *already built* system prompt and XML-delimited user prompt. A
   provider must never alter RAG behaviour.
@@ -155,10 +160,18 @@ Active on **both** `/api/query` and `/api/chat`. Layer 2 blocks before any LLM c
 FAISS IndexFlatL2 doesn't support deletion → rebuild entire index without deleted doc's vectors.
 **Performance:** O(n) rebuild acceptable because deletions are infrequent.
 
-### 7. API Key Storage
+### 7. API Key Storage — local file only, no `.env`
 Keys live encrypted in `backend/data/app.db` (`crypto.py`), unlocked by
 `APP_SECRET_KEY` or a generated `data/.secret_key`. `data/` is gitignored.
 The settings API returns `masked_key` only — never the plaintext key.
+
+**`.env` is no longer a key source.** Provider keys are configured exclusively
+through the Settings UI, so there is one place to look and one active provider.
+`store/bootstrap.py` copies a key still present in the environment into the
+database **once**, on the first start after this change, then writes the
+`legacy_env_keys_imported` flag and never reads the environment again — an
+upgrade path, not a fallback. A key re-added to `.env` afterwards is ignored.
+`APP_SECRET_KEY` remains the one meaningful env var (it unlocks the store).
 
 ## Three-Tile Architecture (Target State)
 
@@ -168,7 +181,7 @@ the tiles differ only in which pipeline the chat endpoint runs.
 | Tile | Route | Pipeline | Endpoint |
 |------|-------|----------|----------|
 | **RAG** | `/chat` | question → retrieve → LLM → text | `/api/chat` (exists) |
-| **Tool Calling** | `/tools` | question → LLM picks tool → execute → feed result back → LLM → readable text | `/api/tools/chat` (new) |
+| **Tool Calling** | `/tools` | question → LLM picks tool → execute → feed result back → LLM → readable text | `/api/tools/chat` (exists) |
 | **Guardrails** | `/guardrails` | question → sanitize → injection check → RAG → output check → text + verdict | `/api/guardrails/chat` (new) |
 
 The landing page with the three tiles is `/`. Unknown paths redirect to `/`.
@@ -182,11 +195,12 @@ frontend/src/
 ├── pages/
 │   ├── LandingPage.jsx      # the three tiles
 │   ├── RagMode.jsx          # sidebar: FileUpload + session stats + document list
+│   ├── ToolsMode.jsx        # sidebar: live tool catalog from GET /api/tools
 │   └── PlaceholderMode.jsx  # preview for a tile with no backend yet (composer disabled)
 ├── components/
 │   ├── ChatShell.jsx        # shared layout: <aside>{sidebar}</aside> + ChatWindow + MessageInput
 │   ├── SettingsPanel.jsx    # provider modal, mounted once in App.jsx (global to all tiles)
-│   └── ToolCallCard.jsx     # (planned) renders one tool invocation: name, args, result
+│   └── ToolCallCard.jsx     # renders one tool invocation: name, args, raw result
 └── hooks/useDocumentChat.js # useDocumentChat({ api }) — defaults to '/api/chat'
 ```
 Routing is `react-router-dom` v7 (`BrowserRouter` in `main.jsx`). Each tile is a
@@ -235,29 +249,68 @@ backend/app/
 └── routers/tools.py           # POST /api/tools/chat
 ```
 
-**The one real piece of work:** `ChatProvider` today is single-turn
-(`complete(system, user)` / `stream(system, user)`) with no message history and
-no tools. Add one method rather than changing the existing two:
+**How it is wired (BUILT):** `ChatProvider` keeps its single-turn
+`complete()` / `stream()` untouched; tool calling is a third method so the RAG
+path could not regress:
 
 ```python
 def stream_tools(self, system: str, messages: list[dict],
                  tools: list[dict]) -> Iterator[dict]:
     """Yield {"type": "text"|"tool_call"|"usage", ...}.
-    Default implementation raises ProviderError('<label> tool calling not wired up yet').
+    Base implementation raises ProviderError('<label> tool calling is not wired up yet').
     """
 ```
+`messages` uses a neutral, OpenAI-ish shape that each provider maps onto its own
+wire format — `{"role","content"}`, `{"role":"assistant","tool_calls":[{id,name,args}]}`,
+`{"role":"tool","tool_call_id","content"}`. Only **OpenAI/Azure implements it**;
+Anthropic and Gemini inherit the clear error, and the Tools tile tells the user
+to switch provider under Settings.
+
 Each provider normalizes its own wire format into that shared event shape:
 - **OpenAI** — `tools=[...]`, accumulate streamed `delta.tool_calls` argument fragments, reply with `{"role": "tool", "tool_call_id": ...}`
 - **Anthropic** — `tools=[...]`, `stop_reason == "tool_use"`, reply with a `tool_result` content block
 - **Gemini** — `function_declarations`, `functionCall` / `functionResponse` parts
 
-Implement OpenAI first; the others keep the clear error until wired up.
+⚠️ OpenAI streams tool-call arguments as **fragments addressed by `index`, not by
+id** — accumulate per index across chunks and only `json.loads` once the stream
+ends. Parsing early yields truncated JSON.
 
-**Surfacing tool calls in the UI:** `format_sse_stream` already speaks AI SDK v4
-part codes (`0:` text, `8:` annotation, `d:` finish, `3:` error). Two more give
-native rendering — `9:{"toolCallId","toolName","args"}` and
-`a:{"toolCallId","result"}` — which `useChat` exposes as `message.toolInvocations`
-for `ToolCallCard.jsx`.
+**Surfacing tool calls in the UI (BUILT):** `app/sse.py` speaks AI SDK v4 part
+codes (`0:` text, `8:` annotation, `d:` finish, `3:` error) plus
+`9:{"toolCallId","toolName","args"}` and `a:{"toolCallId","result"}`, which
+`useChat` exposes as `message.toolInvocations` — rendered by `ToolCallCard.jsx`
+with no custom stream parsing on the frontend.
+
+### The tool registry (`services/tools/registry.py`)
+
+One dict is the single source of truth: the schemas sent to the model, the
+executor, and the list the UI shows are all derived from it, so the sidebar can
+never claim a tool the model doesn't have.
+
+| Tool | kind | What it does |
+|------|------|--------------|
+| `get_weather` | `api` | Live current weather via Open-Meteo — **keyless**, so the tile demos a real external API without a second key to configure. Two hops: name → coordinates → forecast. |
+| `calculator` | `local` | Arithmetic, **AST-sandboxed** |
+| `search_documents` | `rag` | Semantic FAISS search — same embedding, same `SIMILARITY_THRESHOLD` filter as the RAG tile |
+| `list_documents` | `rag` | Uploaded filenames + chunk counts |
+
+Adding a tool = one entry (`schema`, `fn`, `label`, `kind`, `example`). `kind`
+drives the UI badge, `example` becomes the clickable "Try:" prompt.
+
+🛡️ **`calculator` must never use `eval()`.** The model will pass it arbitrary
+strings straight from the chat box, so an `eval` there is remote code execution
+reachable by any user. It parses to an AST and walks a whitelist of node types,
+with an exponent cap so `2**99999999` can't pin a core. Verified blocked:
+`__import__("os").system(...)`, `open(...)`.
+
+**`run_tool()` never raises.** A tool failure returns `{"error": ...}` as data so
+the model can explain it. A raised exception would drop the SSE stream with no
+`d:` finish frame and hang the UI.
+
+**Tool results are untrusted input.** They are appended to the conversation, so
+the tool-calling system prompt states that results are DATA to report on, never
+commands to obey — a document passage or an API response could otherwise carry an
+injection.
 
 ### Guardrails tile
 Mostly making the existing defenses *visible*:
@@ -272,14 +325,15 @@ and `/api/query` keep their defenses hardcoded regardless of the flag.
 
 ### Build order
 1. ~~Extract `ChatShell` + landing page → RAG tile works immediately~~ **DONE** — landing page, `modes.jsx`, `ChatShell`, `RagMode`, `PlaceholderMode`, per-tile routes; RAG behaviour unchanged
-2. Extract `app/sse.py`; add `stream_tools` to `base.py` (raising default) + OpenAI implementation
-3. Tool registry with 2-3 tools + `/api/tools/chat` + `ToolCallCard`
+2. ~~Extract `app/sse.py`; add `stream_tools` to `base.py` (raising default) + OpenAI implementation~~ **DONE**
+3. ~~Tool registry with 4 tools + `/api/tools/chat` + `ToolCallCard`~~ **DONE**
 4. Guardrails router + verdict panel
 5. Anthropic / Gemini tool support last
 
-**Open question before building:** should `search_documents` be registered as a
-tool so the Tools tile also answers document questions? It demos better (the model
-chooses between retrieval and an API) but blurs the distinction the tiles teach.
+**Resolved:** `search_documents` and `list_documents` ARE registered, so the Tools
+tile can also answer document questions. The model choosing between retrieval and
+an external API is the better demo. The tiles still differ clearly: RAG always
+retrieves, Tools decides whether to.
 
 ## Critical Code Patterns
 
@@ -326,7 +380,9 @@ f"3:{json.dumps(msg)}\n"         # error
 - `POST /api/providers/{provider}/activate` - switch the active chat provider
 - `POST /api/providers/{provider}/test` - validate credentials with a live call
 - `DELETE /api/providers/{provider}` - remove stored settings
-- *(planned)* `POST /api/tools/chat`, `POST /api/guardrails/chat`
+- `GET /api/tools` - → {count, tools:[{name, label, kind, description, parameters, example}]}
+- `POST /api/tools/chat` - {messages:[...]} → SSE stream with tool call/result parts
+- *(planned)* `POST /api/guardrails/chat`
 
 ## Troubleshooting Quick Reference
 
@@ -336,8 +392,12 @@ f"3:{json.dumps(msg)}\n"         # error
 | Hallucinated numbers | 1. System prompt has "NEVER guess numbers"<br>2. SUMMARY_PATTERNS includes "how many"<br>3. TEMPERATURE=0.3 |
 | Summary queries incomplete | 1. Query matches SUMMARY_PATTERNS<br>2. get_all_chunks() called<br>3. MAX_CONTEXT_TOKENS not truncating |
 | Prompt injection works | 1. INJECTION_PATTERNS covers phrase<br>2. detect_injection() called in the router<br>3. XML tags in prompt |
-| "Chat provider is not ready" | 1. Key saved via /api/providers or in .env<br>2. Model name set<br>3. Azure also needs base_url + api_version |
+| "Chat provider is not ready" | 1. Key saved via the Settings UI / `PUT /api/providers` — `.env` is NOT read<br>2. Model name set<br>3. Azure also needs base_url + api_version |
 | Stream dies mid-answer | Malformed SSE part — every part needs its code prefix and trailing `\n`; `d:` needs a finishReason |
+| "tool calling is not wired up yet" | Only OpenAI/Azure implements `stream_tools()` — switch provider under Settings |
+| Tool cards don't render | Parts must be `9:` then `a:` with matching `toolCallId`; `useChat` drops unpaired ones |
+| Model answers without calling a tool | Schema `description` is what it selects on — say when to use the tool, not just what it does |
+| Tool loop stops early | `MAX_ITERATIONS = 4` in `tool_service.py` |
 | Answers stop but UI hangs | The `d:` finish frame was never emitted |
 
 ## File Modification History (What Changed and Why)
@@ -369,11 +429,29 @@ f"3:{json.dumps(msg)}\n"         # error
 - Backend: `qa_service_streaming.py` + `chat.py` SSE endpoint, all 3 defense layers preserved
 - `/api/query` kept for backward compatibility
 
-### Multi-Provider Support (Latest)
+### Tool Calling (Latest)
+- Added `app/sse.py`; `chat.py` now imports it instead of formatting parts inline (RAG behaviour unchanged)
+- Added `stream_tools()` to `ChatProvider` (raising default) + the OpenAI/Azure implementation
+- Added `services/tools/` (registry + weather/calculator/documents) and `services/tool_service.py`
+- Added `routers/tools.py`: `GET /api/tools`, `POST /api/tools/chat` — same sanitize + injection check as `/api/chat`
+- Frontend: `ToolsMode.jsx`, `ToolCallCard.jsx`, `getTools()`; `ChatWindow` renders `message.toolInvocations`
+- `ChatWindow` empty-state icon is now parameterized (`EmptyIcon` / `emptyAccent`), fed from `mode.accent.gradient`
+- `modes.jsx`: Tool Calling `status: 'live'`, added `accent.gradient` to all three tiles
+
+### Provider Storage (Latest)
+- `config.py`: dropped `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GEMINI_API_KEY`; added `LEGACY_ENV_KEYS`, read only by the migration
+- `providers/__init__.py`: removed `_ENV_KEYS` and `api_key_from_env`; added an `icon` slug per catalog entry and `is_configured()`
+- Added `store/bootstrap.py` + `settings_store.get_state()/set_state()`; `main.py` runs the one-time import at startup and logs what it imported
+- `routers/settings.py`: returns `icon`, drops `key_from_env`; deleting the active provider reassigns "active" to a still-configured one
+- Deleted `backend/.env`; `.env.example` now documents only the optional `APP_SECRET_KEY`
+- Frontend: added `components/ProviderIcon.jsx` (OpenAI / Anthropic / Gemini / Azure brand marks); `SettingsPanel` gained an "Active for chat" strip and per-row badges and lost the "from .env" pill; `App.jsx` owns the active provider and passes it to every tile so `ChatShell` and `LandingPage` show it
+
+### Multi-Provider Support
 - Added `services/providers/` (OpenAI, Azure OpenAI, Anthropic, Gemini) behind a `ChatProvider` ABC
 - Added `store/settings_store.py` (SQLite) + `crypto.py` (encrypted keys, masked display)
 - Added `routers/settings.py` for provider CRUD / activate / live key test
 - Embeddings deliberately pinned to OpenAI (index compatibility)
+- `.env` fallback removed later — see [Provider Storage](#provider-storage-latest)
 - Added `app.sh` for single-instance start/stop of both services
 
 ## When to Modify What
@@ -381,6 +459,7 @@ f"3:{json.dumps(msg)}\n"         # error
 ### ✅ Safe to change:
 - Frontend styling, UI text, log messages
 - Adding a model name to `PROVIDER_CATALOG["…"]["models"]`
+- Adding a tool to `TOOLS` (registry.py) — the UI list follows automatically
 
 ### ⚠️ Requires user testing:
 - SIMILARITY_THRESHOLD, TEMPERATURE, TOP_K_RESULTS, CHUNK_SIZE/OVERLAP, MAX_CONTEXT_TOKENS
@@ -390,6 +469,8 @@ f"3:{json.dumps(msg)}\n"         # error
 - INJECTION_PATTERNS (could miss attacks)
 - System prompt security instructions, input sanitization
 - Anything touching `crypto.py` or key storage/masking
+- `calculator.py`'s AST whitelist — it evaluates attacker-controlled strings
+- Any new tool that touches the filesystem, network or shell
 - The guardrails demo toggles (must never disable defenses on the real endpoints)
 
 ### 🚫 NEVER change without user approval:
@@ -397,6 +478,8 @@ f"3:{json.dumps(msg)}\n"         # error
 - Disable similarity threshold filtering
 - Weaken anti-hallucination guidelines
 - Expose system prompts or plaintext API keys to the client
+- Re-introduce an environment-variable fallback for provider keys (one storage
+  location, one active provider — see [API Key Storage](#7-api-key-storage--local-file-only-no-env))
 - Change EMBEDDING_MODEL (invalidates the FAISS index)
 
 ## Quick Reference for AI Assistants
@@ -408,7 +491,7 @@ f"3:{json.dumps(msg)}\n"         # error
 
 **Common pitfalls:**
 - Empty results? Check the FAISS index exists and documents are uploaded
-- Provider errors? `GET /api/providers` shows which are `configured`; `.env` is only a fallback
+- Provider errors? `GET /api/providers` shows which are `configured` and which one `is_active`; keys come from `data/app.db` only, never `.env`
 - Index corruption? Delete `faiss_index/` and re-upload
 - Blocking calls in the async path? Wrap with `run_in_threadpool` — provider SDKs are synchronous
 
@@ -434,8 +517,19 @@ ada-002 vectors and `SIMILARITY_THRESHOLD=1.8` is calibrated to that model's L2
 distances, so changing embedding models would invalidate every stored vector.
 An OpenAI key is required even when chat runs elsewhere.
 
-**Key resolution order:** database → environment variable (`OPENAI_API_KEY`,
-`ANTHROPIC_API_KEY`, `GEMINI_API_KEY`). Existing `.env`-only setups keep working.
+**Key resolution:** the local database, full stop — `backend/data/app.db`, one
+active provider, managed in the Settings UI. Environment variables are read only
+by the one-time `store/bootstrap.py` migration described under
+[API Key Storage](#7-api-key-storage--local-file-only-no-env), so an older
+`.env`-only install upgrades cleanly and `backend/.env` can then be deleted.
+
+**Provider icons.** Each `PROVIDER_CATALOG` entry carries an `icon` slug
+(`openai` / `anthropic` / `gemini` / `azure`) that `GET /api/providers` returns and
+`components/ProviderIcon.jsx` maps to a brand SVG. Adding a provider means adding
+the slug in both places; an unknown slug falls back to a neutral plug glyph. The
+active provider's badge appears in the landing header and in every tile's sidebar
+footer — that badge *is* the button that opens the settings panel, so the running
+integration is visible from anywhere in the app.
 
 ### ⚠️ Anthropic model gotcha
 `temperature` was REMOVED on `claude-opus-5`, `claude-sonnet-5`, `claude-opus-4-8/4-7`
@@ -451,7 +545,7 @@ Do not "restore" `temperature=0.3` for those models.
 # Or manually:
 # cd backend && uvicorn app.main:app --reload
 # cd frontend && npm run dev
-# Keys: Settings UI (stored encrypted) or backend/.env as fallback
+# Keys: Settings UI only (stored encrypted in backend/data/app.db)
 ```
 
 ---

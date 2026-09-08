@@ -29,6 +29,7 @@ export const MODES = [
       border: 'hover:border-blue-400',
       text: 'text-blue-600',
       dot: 'bg-blue-500',
+      gradient: 'from-blue-500 to-blue-600',
     },
     Icon: (props) => (
       <svg {...iconProps} {...props}>
@@ -47,15 +48,19 @@ export const MODES = [
     tagline: 'The model calls a function, then explains the result',
     description:
       'The model reads your question and picks a tool. The backend runs it locally, hands the raw JSON back, and the model turns that into a readable answer — a two-pass loop you can watch step by step.',
-    status: 'planned',
+    status: 'live',
     endpoint: '/api/tools/chat',
     steps: ['Pass 1 → tool call', 'Execute locally', 'Pass 2 → readable text'],
+    // Tool calling needs the provider's function-calling wire format; only the
+    // OpenAI connector implements stream_tools() so far.
+    requiresProvider: 'openai',
     accent: {
       icon: 'bg-violet-600',
       iconSoft: 'bg-violet-50 text-violet-600',
       border: 'hover:border-violet-400',
       text: 'text-violet-600',
       dot: 'bg-violet-500',
+      gradient: 'from-violet-500 to-violet-600',
     },
     Icon: (props) => (
       <svg {...iconProps} {...props}>
@@ -83,6 +88,7 @@ export const MODES = [
       border: 'hover:border-green-400',
       text: 'text-green-700',
       dot: 'bg-green-500',
+      gradient: 'from-green-500 to-green-600',
     },
     Icon: (props) => (
       <svg {...iconProps} {...props}>

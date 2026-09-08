@@ -19,7 +19,6 @@ Upload documents (PDF, TXT, DOCX) and ask questions. Get accurate, AI-powered an
 ```bash
 cd backend
 pip install -r requirements.txt
-echo "OPENAI_API_KEY=your-key-here" > .env
 uvicorn app.main:app --reload
 ```
 
@@ -32,6 +31,13 @@ npm run dev
 
 **3. Access Application**
 Open browser → **http://localhost:5173**
+
+**4. Connect a provider**
+Click **Settings** (top right) → paste an API key for OpenAI, Anthropic, Gemini or
+Azure OpenAI → **Save** → **Use for chat**. Keys are stored encrypted in the local
+file `backend/data/app.db`, never in `.env`, and exactly one provider is active at a
+time. An OpenAI key is required regardless, because document search always uses
+OpenAI embeddings.
 
 ---
 

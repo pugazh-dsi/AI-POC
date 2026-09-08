@@ -1,11 +1,12 @@
 import { Link } from 'react-router-dom'
 import { MODES } from '../modes'
+import { ProviderBadge } from '../components/ProviderIcon'
 
 /**
  * Entry screen: one tile per capability. Picking a tile swaps the whole view
  * for that mode's chat (App.jsx owns the `mode` state).
  */
-export default function LandingPage({ onOpenSettings }) {
+export default function LandingPage({ onOpenSettings, activeProvider = null }) {
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col">
       <div className="flex justify-end px-6 pt-6">
@@ -19,6 +20,13 @@ export default function LandingPage({ onOpenSettings }) {
             <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
           </svg>
           Settings
+          {activeProvider && (
+            <>
+              <span className="w-px h-4 bg-gray-200" />
+              <ProviderBadge icon={activeProvider.icon} size="sm" />
+              <span className="text-gray-500 font-normal">{activeProvider.label}</span>
+            </>
+          )}
         </button>
       </div>
 

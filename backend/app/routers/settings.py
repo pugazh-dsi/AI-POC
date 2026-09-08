@@ -1,19 +1,23 @@
 """
 Provider settings API.
 
-API keys are stored encrypted in the local SQLite database and are NEVER
-returned to the client — only a masked hint (sk-...b3f9).
+Providers are configured here and nowhere else: keys are stored encrypted in the
+local SQLite database (backend/data/app.db), never read from the environment,
+and never returned to the client — only a masked hint (sk-...b3f9). Exactly one
+provider is active for chat at any time.
 """
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 
+from app.config import DEFAULT_CHAT_PROVIDER
 from app.crypto import mask
 from app.services.providers import (
     PROVIDER_CATALOG,
     build_provider,
     get_active_provider_id,
+    is_configured,
     resolve_settings,
 )
 from app.services.providers.base import ProviderError
@@ -42,6 +46,7 @@ def _describe(provider: str, active: str) -> dict:
         "id": provider,
         "label": catalog["label"],
         "notes": catalog["notes"],
+        "icon": catalog["icon"],
         "fields": catalog["fields"],
         "models": catalog["models"],
         "model": settings["model"],
@@ -49,7 +54,6 @@ def _describe(provider: str, active: str) -> dict:
         "api_version": settings["api_version"],
         "masked_key": mask(settings["api_key"]),
         "configured": bool(settings["api_key"]),
-        "key_from_env": settings["api_key_from_env"],
         "is_active": provider == active,
     }
 
@@ -113,4 +117,19 @@ async def delete_provider(provider: str):
     if not settings_store.delete_provider(provider):
         raise HTTPException(status_code=404, detail="Provider is not configured.")
 
-    return {"provider": provider, "status": "deleted"}
+    # Removing the active provider would leave chat pointing at a keyless one:
+    # hand "active" to whichever provider still has a key, if any.
+    if provider == get_active_provider_id():
+        replacement = next(
+            (p for p in PROVIDER_CATALOG if p != provider and is_configured(p)),
+            DEFAULT_CHAT_PROVIDER,
+        )
+        settings_store.set_active_provider(replacement)
+
+    active = get_active_provider_id()
+    return {
+        "provider": provider,
+        "status": "deleted",
+        "active": active,
+        "providers": [_describe(p, active) for p in PROVIDER_CATALOG],
+    }
