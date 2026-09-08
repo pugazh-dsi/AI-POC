@@ -25,6 +25,7 @@ backend/
 │   │   ├── query.py                 # POST /query (legacy, non-streaming)
 │   │   ├── chat.py                  # POST /chat - SSE stream in AI SDK v4 format
 │   │   ├── tools.py                 # GET /tools (catalog) + POST /tools/chat
+│   │   ├── chats.py                 # Chat history: list / read / rename / delete
 │   │   └── settings.py              # Provider config CRUD + activate + live key test
 │   ├── services/
 │   │   ├── document_processor.py    # Parse files + chunk text
@@ -33,6 +34,7 @@ backend/
 │   │   ├── qa_service.py            # QA orchestration, non-streaming
 │   │   ├── qa_service_streaming.py  # QA orchestration, streaming (MOST COMPLEX)
 │   │   ├── tool_service.py          # Tool-calling loop (max 4 iterations)
+│   │   ├── chat_history.py          # Persistence tap around every stream
 │   │   ├── tools/
 │   │   │   ├── registry.py          # TOOLS dict - single source of truth for model AND UI
 │   │   │   ├── weather.py           # get_weather via Open-Meteo (keyless)
@@ -47,9 +49,10 @@ backend/
 │   └── store/
 │       ├── vector_store.py          # FAISS index management
 │       ├── settings_store.py        # SQLite: provider settings + THE one active provider
+│       ├── chat_store.py            # SQLite: chat sessions + messages (same app.db)
 │       └── bootstrap.py             # ONE-TIME import of legacy .env keys into the DB
 ├── data/                            # Local app DB (runtime, gitignored)
-│   ├── app.db                       # provider settings + encrypted keys
+│   ├── app.db                       # provider settings + encrypted keys + chat history
 │   └── .secret_key                  # Master key, 0600
 ├── uploads/                         # Uploaded files (runtime)
 ├── faiss_index/                     # index.faiss + metadata.json (runtime)
@@ -60,8 +63,8 @@ frontend/src/
 ├── modes.jsx                        # The three tiles' metadata (see Three-Tile Architecture)
 ├── api.js
 ├── pages/ (LandingPage, RagMode, ToolsMode, PlaceholderMode)
-├── hooks/useDocumentChat.js         # Wraps AI SDK useChat, endpoint is a parameter
-└── components/ (ChatShell, SettingsPanel, ProviderIcon, FileUpload, ChatWindow, MessageInput)
+├── hooks/useDocumentChat.js         # Wraps AI SDK useChat + owns the tile's chat history
+└── components/ (ChatShell, ChatHistory, DocumentsModal, SettingsPanel, ProviderIcon, FileUpload, ChatWindow, MessageInput)
 ```
 
 ## Critical Configuration (`backend/app/config.py`)
@@ -194,11 +197,13 @@ frontend/src/
 ├── modes.jsx                # MODES registry: path, title, tagline, steps, endpoint, icon, accent classes
 ├── pages/
 │   ├── LandingPage.jsx      # the three tiles
-│   ├── RagMode.jsx          # sidebar: FileUpload + session stats + document list
+│   ├── RagMode.jsx          # sidebar: chat history + recent docs → "View all documents" popup
 │   ├── ToolsMode.jsx        # sidebar: live tool catalog from GET /api/tools
 │   └── PlaceholderMode.jsx  # preview for a tile with no backend yet (composer disabled)
 ├── components/
-│   ├── ChatShell.jsx        # shared layout: <aside>{sidebar}</aside> + ChatWindow + MessageInput
+│   ├── ChatShell.jsx        # shared layout: <aside>{history}{sidebar}{sidebarFooter}</aside> + ChatWindow + MessageInput
+│   ├── ChatHistory.jsx      # new chat / open / rename / delete, in every tile's sidebar
+│   ├── DocumentsModal.jsx   # RAG tile popup: upload + session stats + full index + delete
 │   ├── SettingsPanel.jsx    # provider modal, mounted once in App.jsx (global to all tiles)
 │   └── ToolCallCard.jsx     # renders one tool invocation: name, args, raw result
 └── hooks/useDocumentChat.js # useDocumentChat({ api }) — defaults to '/api/chat'
@@ -312,6 +317,66 @@ the tool-calling system prompt states that results are DATA to report on, never
 commands to obey — a document passage or an API response could otherwise carry an
 injection.
 
+### RAG tile: the documents popup
+
+Everything document-related lives in `DocumentsModal`, not the sidebar: the
+upload dropzone, the session stats (documents / chunks indexed / questions
+asked), the full index with a filename filter once there are more than 5 files,
+and delete. The sidebar keeps the conversation — chat history, plus a preview of
+the 3 newest uploads (`SIDEBAR_DOCS` in `RagMode.jsx`) — and one button into the
+popup, labelled **Upload a document** while the index is empty and
+**View all documents (N)** once it isn't. That button sits in `ChatShell`'s
+`sidebarFooter` slot, pinned under the scrolling area and above the provider
+badge, so it stays reachable however long the chat history grows.
+
+The modal renders from the `documents` state the tile already holds and calls the
+tile's `handleUploadSuccess` / `handleDelete`, so there is one source of truth:
+the preview, the stats and the popup can never disagree, and opening it costs no
+extra fetch. `FileUpload` takes a `className` prop (default `p-4`) so the modal
+can supply its own spacing.
+
+### Chat history (BUILT)
+
+Every turn on every tile is stored, so a conversation survives a reload, can be
+re-opened from the sidebar, and can be continued where it left off.
+
+```
+POST /api/chat | /api/tools/chat  {messages, chatId?}
+  └─ ensure_session(chatId, mode)   → opens one if the client didn't send it
+  └─ save_message(user)             → the raw question, before sanitization
+  └─ record_stream(session, pipeline)
+        passes every event through untouched, then writes the assistant
+        message (text + annotations + tool invocations) when the stream ends
+```
+
+- **Storage:** `store/chat_store.py` — `chat_sessions` + `chat_messages` in the
+  same `backend/data/app.db` as provider settings. One local file, no server.
+- **Scoped by tile:** a session's `mode` ('rag' / 'tools') is the history bucket,
+  so each sidebar lists only its own conversations. A new tile gets history for
+  free by passing its `mode.id` to the hook.
+- **Titles** come from the first user message (`make_title`, 60 chars); the
+  sidebar can rename.
+- **Stored in the AI SDK's shape** — `annotations` (sources / provider / usage)
+  and `toolInvocations` are saved as JSON, so a reloaded turn renders with its
+  citations and tool cards exactly like the live stream did.
+- **`chatId` travels in the request body**, passed per turn via
+  `append(msg, { body: { chatId } })`, so the answer lands in the chat the user
+  is actually looking at. A turn sent without one opens a conversation and
+  returns its id on the `X-Chat-Id` header (`expose_headers` in main.py).
+
+⚠️ **History must never be able to break an answer.** `chat_history.py` catches
+its own write failures and degrades to "this turn isn't saved"; the assistant
+message is written in a `finally`, so a client that disconnects mid-answer still
+keeps what was generated. `add_message` returns None for a session deleted
+mid-stream rather than recreating it.
+
+Blocked injection attempts are stored too — the transcript shows what was asked
+and what the guard replied.
+
+Reading history is exempt from the rate limiter (`middleware.py`,
+GET `/api/chats*` only): browsing local SQLite must not consume the budget that
+protects the paid endpoints. Create / rename / delete still count.
+
 ### Guardrails tile
 Mostly making the existing defenses *visible*:
 - Sidebar listing the 3 layers with per-layer on/off toggles (**demo only**, default ON)
@@ -372,7 +437,7 @@ f"3:{json.dumps(msg)}\n"         # error
 ## API Endpoints
 - `POST /api/upload` - multipart/form-data → {message, filename, chunks_added}
 - `POST /api/query` - {question} → {answer, sources} (legacy, non-streaming)
-- `POST /api/chat` - {messages:[{role,content}]} → SSE stream (AI SDK v4 format)
+- `POST /api/chat` - {messages:[{role,content}], chatId?} → SSE stream (AI SDK v4 format)
 - `GET /api/documents` - → {documents:[{filename, chunks}]}
 - `DELETE /api/documents/{filename}` - → {message, filename}
 - `GET /api/providers` - → {active, providers:[...]}  (keys masked)
@@ -381,7 +446,12 @@ f"3:{json.dumps(msg)}\n"         # error
 - `POST /api/providers/{provider}/test` - validate credentials with a live call
 - `DELETE /api/providers/{provider}` - remove stored settings
 - `GET /api/tools` - → {count, tools:[{name, label, kind, description, parameters, example}]}
-- `POST /api/tools/chat` - {messages:[...]} → SSE stream with tool call/result parts
+- `POST /api/tools/chat` - {messages:[...], chatId?} → SSE stream with tool call/result parts
+- `GET /api/chats?mode=rag` - → {count, chats:[{id, mode, title, updated_at, message_count, preview}]}
+- `POST /api/chats` - {mode, title?} → the new chat (titled by its first question)
+- `GET /api/chats/{id}` - → {chat, messages:[{id, role, content, createdAt, annotations, toolInvocations}]}
+- `PATCH /api/chats/{id}` - {title} → rename
+- `DELETE /api/chats/{id}` - → {message, id}
 - *(planned)* `POST /api/guardrails/chat`
 
 ## Troubleshooting Quick Reference
@@ -399,6 +469,9 @@ f"3:{json.dumps(msg)}\n"         # error
 | Model answers without calling a tool | Schema `description` is what it selects on — say when to use the tool, not just what it does |
 | Tool loop stops early | `MAX_ITERATIONS = 4` in `tool_service.py` |
 | Answers stop but UI hangs | The `d:` finish frame was never emitted |
+| Chat not saved | Backend log shows "Chat history..." — the write failed but the answer still streamed; check `backend/data/app.db` is writable |
+| Re-opened chat lost its tool cards | `toolInvocations` are stored on the assistant row — a turn that never finished streaming has none |
+| Sidebar list not updating | `refreshChats()` runs in the hook's `onFinish`; a stream that errored never fires it |
 
 ## File Modification History (What Changed and Why)
 
@@ -437,6 +510,30 @@ f"3:{json.dumps(msg)}\n"         # error
 - Frontend: `ToolsMode.jsx`, `ToolCallCard.jsx`, `getTools()`; `ChatWindow` renders `message.toolInvocations`
 - `ChatWindow` empty-state icon is now parameterized (`EmptyIcon` / `emptyAccent`), fed from `mode.accent.gradient`
 - `modes.jsx`: Tool Calling `status: 'live'`, added `accent.gradient` to all three tiles
+
+### RAG Documents Popup (Latest)
+- Added `components/DocumentsModal.jsx` (Escape / backdrop close, upload, stats,
+  filter, delete)
+- `RagMode.jsx`: FileUpload and the Session Overview block moved out of the sidebar
+  into the popup; the sidebar keeps a 3-item preview and the button that opens it
+- `FileUpload.jsx`: outer padding is now a `className` prop so it can sit in the modal
+- `ChatShell.jsx`: added the `sidebarFooter` slot (pinned, below the scroll area)
+  and RagMode's documents button moved into it
+- `ChatWindow.jsx` / `MessageInput.jsx`: transcript and composer share one centred
+  `max-w-4xl` column with `px-6 md:px-10 lg:px-16` gutters, so messages no longer
+  stretch edge to edge on a wide screen
+
+### Chat History (Latest)
+- Added `store/chat_store.py` (sessions + messages) and `services/chat_history.py`
+  (`ensure_session` / `save_message` / `record_stream`)
+- Added `routers/chats.py`; `main.py` initializes the tables and exposes `X-Chat-Id`
+- `chat.py` / `tools.py`: optional `chatId` on the request, turns persisted around
+  the unchanged pipelines — the security layers run exactly as before
+- `middleware.py`: GET `/api/chats*` exempt from the per-IP rate limit
+- Frontend: `useDocumentChat` gained `send` / `chats` / `chatId` / `newChat` /
+  `openChat` / `removeChat` / `renameChat`; new `components/ChatHistory.jsx`;
+  `ChatShell` gained a `history` slot above the mode sidebar; both tiles call
+  `send()` instead of `append()`
 
 ### Provider Storage (Latest)
 - `config.py`: dropped `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GEMINI_API_KEY`; added `LEGACY_ENV_KEYS`, read only by the migration

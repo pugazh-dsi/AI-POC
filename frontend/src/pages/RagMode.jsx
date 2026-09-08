@@ -1,19 +1,29 @@
 import { useState, useEffect } from 'react'
 import ChatShell from '../components/ChatShell'
-import FileUpload from '../components/FileUpload'
+import ChatHistory from '../components/ChatHistory'
+import DocumentsModal from '../components/DocumentsModal'
 import { getDocuments, deleteDocument } from '../api'
 import { useDocumentChat } from '../hooks/useDocumentChat'
 
 /**
  * RAG tile: upload documents, ask questions, get answers cited back to the
  * passages the model actually saw. This is the pipeline that ships today.
+ *
+ * Every turn is stored under the 'rag' history bucket, so the sidebar can
+ * re-open an earlier conversation and carry on in it.
+ *
+ * Everything about documents — uploading, the stats, the full list, deleting —
+ * lives in DocumentsModal behind the sidebar button, leaving that column for
+ * the conversation itself.
  */
 export default function RagMode({ mode, onOpenSettings, activeProvider }) {
   const [documents, setDocuments] = useState([])
+  const [docsOpen, setDocsOpen] = useState(false)
 
-  const { messages, append, isLoading, addSystemMessage } = useDocumentChat({
-    api: mode.endpoint,
-  })
+  const {
+    messages, isLoading, addSystemMessage,
+    send, chats, chatId, newChat, openChat, removeChat, renameChat,
+  } = useDocumentChat({ api: mode.endpoint, mode: mode.id })
 
   useEffect(() => {
     getDocuments().then(setDocuments).catch(() => {})
@@ -40,7 +50,7 @@ export default function RagMode({ mode, onOpenSettings, activeProvider }) {
   }
 
   const handleSend = (question) => {
-    append({ role: 'user', content: question })
+    send(question)
   }
 
   // The active provider is reported per answer as a stream annotation, so the
@@ -48,35 +58,61 @@ export default function RagMode({ mode, onOpenSettings, activeProvider }) {
   // hardcoded model name.
   const lastMeta = [...messages].reverse().find((m) => m.annotations?.[0])?.annotations?.[0]
 
+  // Newest uploads land at the end of the list, so the sidebar previews the
+  // last few and the popup carries the rest.
+  const SIDEBAR_DOCS = 3
+  const recentDocuments = [...documents].reverse().slice(0, SIDEBAR_DOCS)
+
+  const history = (
+    <ChatHistory
+      chats={chats}
+      chatId={chatId}
+      accent={mode.accent}
+      onNew={newChat}
+      onOpen={openChat}
+      onRename={renameChat}
+      onDelete={removeChat}
+    />
+  )
+
+  // Pinned to the bottom of the sidebar so it stays reachable however long the
+  // chat history grows. It is the one way into everything document-related:
+  // upload, stats, the full index and delete all live in the popup.
+  const sidebarFooter = (
+    <button
+      type="button"
+      onClick={() => setDocsOpen(true)}
+      className="w-full inline-flex items-center justify-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 shadow-sm transition-all hover:border-gray-300 hover:bg-gray-50"
+    >
+      <svg className="w-4 h-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" />
+      </svg>
+      {documents.length === 0
+        ? 'Upload a document'
+        : `View all documents (${documents.length})`}
+    </button>
+  )
+
   const sidebar = (
     <>
-      <FileUpload onUploadSuccess={handleUploadSuccess} />
-
-      <div className="px-4 py-4 bg-gray-50 border-y border-gray-200">
-        <h3 className="text-xs font-medium text-gray-500 mb-3">Session Overview</h3>
-        <div className="grid grid-cols-2 gap-3">
-          <div className="bg-white rounded-lg p-3 border border-gray-200 shadow-sm">
-            <p className="text-xs text-gray-500 mb-1">Documents</p>
-            <p className="text-2xl font-semibold text-gray-900">{documents.length}</p>
-          </div>
-          <div className="bg-white rounded-lg p-3 border border-gray-200 shadow-sm">
-            <p className="text-xs text-gray-500 mb-1">Messages</p>
-            <p className="text-2xl font-semibold text-gray-900">
-              {messages.filter((m) => m.role === 'user').length}
-            </p>
-          </div>
+      <div className="px-4 py-4">
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-xs font-medium text-gray-500">
+            Documents ({documents.length})
+          </h2>
+          {recentDocuments.length < documents.length && (
+            <span className="text-[11px] text-gray-400">
+              showing {recentDocuments.length}
+            </span>
+          )}
         </div>
-      </div>
-
-      <div className="px-4 pb-4">
-        <h2 className="text-xs font-medium text-gray-500 mb-3 mt-4">
-          Documents ({documents.length})
-        </h2>
         {documents.length === 0 ? (
-          <p className="text-sm text-gray-400">No documents uploaded yet</p>
+          <p className="text-sm text-gray-400">
+            No documents yet — upload one from the popup below.
+          </p>
         ) : (
           <ul className="space-y-2">
-            {documents.map((doc) => (
+            {recentDocuments.map((doc) => (
               <li
                 key={doc.filename}
                 className="flex items-center gap-3 p-3 rounded-lg bg-white text-sm group border border-gray-200 hover:border-gray-300 hover:shadow-sm transition-all"
@@ -103,25 +139,39 @@ export default function RagMode({ mode, onOpenSettings, activeProvider }) {
             ))}
           </ul>
         )}
+
       </div>
     </>
   )
 
   return (
-    <ChatShell
-      mode={mode}
-      onOpenSettings={onOpenSettings}
-      activeProvider={activeProvider}
-      sidebar={sidebar}
-      messages={messages}
-      isStreaming={isLoading}
-      onSend={handleSend}
-      placeholder="Ask a question about your documents..."
-      footer={
-        lastMeta?.provider
-          ? `Answered by ${lastMeta.provider} • ${lastMeta.model}`
-          : 'Provider and model are configured under Settings'
-      }
-    />
+    <>
+      <ChatShell
+        mode={mode}
+        onOpenSettings={onOpenSettings}
+        activeProvider={activeProvider}
+        history={history}
+        sidebar={sidebar}
+        sidebarFooter={sidebarFooter}
+        messages={messages}
+        isStreaming={isLoading}
+        onSend={handleSend}
+        placeholder="Ask a question about your documents..."
+        footer={
+          lastMeta?.provider
+            ? `Answered by ${lastMeta.provider} • ${lastMeta.model}`
+            : 'Provider and model are configured under Settings'
+        }
+      />
+
+      <DocumentsModal
+        open={docsOpen}
+        documents={documents}
+        messageCount={messages.filter((m) => m.role === 'user').length}
+        onClose={() => setDocsOpen(false)}
+        onUploadSuccess={handleUploadSuccess}
+        onDelete={handleDelete}
+      />
+    </>
   )
 }

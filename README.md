@@ -1,8 +1,12 @@
-# DocuChat AI 🤖
+# AI Playbook 🤖
 
-**Intelligent Document Q&A System with Real-Time AI Responses**
+**Three LLM patterns — RAG, Tool Calling and Guardrails — behind one chat interface**
 
-Upload documents (PDF, TXT, DOCX) and ask questions. Get accurate, AI-powered answers with source citations in real-time.
+Pick a capability from the landing page. **RAG:** upload documents (PDF, TXT, DOCX) and ask
+questions, answered only from the retrieved passages with source citations. **Tool Calling:**
+the model picks a tool, the backend runs it, and the model explains the result. **Guardrails:**
+the prompt-injection defenses, made visible. All three share the same chat shell and the same
+pluggable provider layer (OpenAI / Anthropic / Gemini / Azure OpenAI).
 
 ---
 

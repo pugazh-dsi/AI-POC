@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# app.sh - single-instance start/stop controller for DocuChat AI
+# app.sh - single-instance start/stop controller for AI Playbook
 #
 #   ./app.sh start     Start backend (uvicorn :8000) + frontend (vite :5173)
 #   ./app.sh stop      Stop both
@@ -143,7 +143,7 @@ start_frontend() {
 }
 
 cmd_start() {
-    printf '\nStarting DocuChat AI...\n'
+    printf '\nStarting AI Playbook...\n'
     start_backend  || return 1
     start_frontend || return 1
     printf '\n'
@@ -154,7 +154,7 @@ cmd_start() {
 }
 
 cmd_stop() {
-    printf '\nStopping DocuChat AI...\n'
+    printf '\nStopping AI Playbook...\n'
     stop_pid_file "Frontend" "$FRONTEND_PID_FILE"
     stop_pid_file "Backend"  "$BACKEND_PID_FILE"
     printf '\n'
@@ -162,7 +162,7 @@ cmd_stop() {
 
 cmd_status() {
     local pid
-    printf '\nDocuChat AI status\n'
+    printf '\nAI Playbook status\n'
     if pid="$(live_pid "$BACKEND_PID_FILE")"; then
         ok "Backend  running (pid $pid) → http://localhost:$BACKEND_PORT"
     else

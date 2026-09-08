@@ -1,7 +1,7 @@
 import { useState, useRef } from 'react'
 import { uploadDocument } from '../api'
 
-export default function FileUpload({ onUploadSuccess }) {
+export default function FileUpload({ onUploadSuccess, className = 'p-4' }) {
   const [dragging, setDragging] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [error, setError] = useState('')
@@ -48,7 +48,7 @@ export default function FileUpload({ onUploadSuccess }) {
   }
 
   return (
-    <div className="p-4">
+    <div className={className}>
       <div
         onDragEnter={handleDragIn}
         onDragLeave={handleDragOut}

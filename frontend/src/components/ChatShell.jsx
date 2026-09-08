@@ -7,12 +7,19 @@ import { ProviderBadge } from './ProviderIcon'
  * Shared layout for every mode: branded sidebar on the left, chat on the
  * right. Modes supply their own sidebar content and message handling; the
  * frame, header and back navigation stay identical across all three tiles.
+ *
+ * `history` is the stored-conversation list (ChatHistory) and renders above the
+ * mode-specific sidebar, so every tile picks up chat history the same way.
+ * `sidebarFooter` is pinned under the scrolling area, above the provider badge —
+ * for the one action a tile always wants reachable, however long the list gets.
  */
 export default function ChatShell({
   mode,
   onOpenSettings,
   activeProvider = null,
+  history,
   sidebar,
+  sidebarFooter,
   messages,
   isStreaming,
   onSend,
@@ -47,7 +54,15 @@ export default function ChatShell({
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto">{sidebar}</div>
+        <div className="flex-1 overflow-y-auto">
+          {/* Conversation list first — it is how you get back to earlier work. */}
+          {history}
+          {sidebar}
+        </div>
+
+        {sidebarFooter && (
+          <div className="px-4 py-3 border-t border-gray-200">{sidebarFooter}</div>
+        )}
 
         <div className="p-3 border-t border-gray-200">
           {/* The active provider is the one integration every tile runs on, so its

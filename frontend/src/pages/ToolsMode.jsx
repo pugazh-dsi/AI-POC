@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import ChatShell from '../components/ChatShell'
+import ChatHistory from '../components/ChatHistory'
 import { getTools } from '../api'
 import { useDocumentChat } from '../hooks/useDocumentChat'
 
@@ -94,7 +95,10 @@ export default function ToolsMode({ mode, onOpenSettings, activeProvider }) {
   const [tools, setTools] = useState([])
   const [loadError, setLoadError] = useState(false)
 
-  const { messages, append, isLoading } = useDocumentChat({ api: mode.endpoint })
+  const {
+    messages, isLoading,
+    send, chats, chatId, newChat, openChat, removeChat, renameChat,
+  } = useDocumentChat({ api: mode.endpoint, mode: mode.id })
 
   useEffect(() => {
     getTools()
@@ -103,11 +107,23 @@ export default function ToolsMode({ mode, onOpenSettings, activeProvider }) {
   }, [])
 
   const handleSend = (question) => {
-    append({ role: 'user', content: question })
+    send(question)
   }
 
   const lastMeta = [...messages].reverse().find((m) => m.annotations?.[0])?.annotations?.[0]
   const callCount = messages.reduce((n, m) => n + (m.toolInvocations?.length || 0), 0)
+
+  const history = (
+    <ChatHistory
+      chats={chats}
+      chatId={chatId}
+      accent={mode.accent}
+      onNew={newChat}
+      onOpen={openChat}
+      onRename={renameChat}
+      onDelete={removeChat}
+    />
+  )
 
   const sidebar = (
     <>
@@ -173,6 +189,7 @@ export default function ToolsMode({ mode, onOpenSettings, activeProvider }) {
       mode={mode}
       onOpenSettings={onOpenSettings}
       activeProvider={activeProvider}
+      history={history}
       sidebar={sidebar}
       messages={messages}
       isStreaming={isLoading}

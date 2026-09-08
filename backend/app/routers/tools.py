@@ -13,6 +13,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from app.sanitizer import sanitize_question, detect_injection
+from app.services.chat_history import ensure_session, record_stream, save_message
 from app.services.tool_service import answer_with_tools
 from app.services.tools import describe_tools
 from app.sse import format_sse_stream, finish_part, text_part
@@ -33,6 +34,9 @@ class Message(BaseModel):
 
 class ToolChatRequest(BaseModel):
     messages: List[Message]
+    # The stored conversation this turn belongs to; a new one is opened when
+    # the client doesn't send it (its id comes back on X-Chat-Id).
+    chatId: str | None = None
 
 
 @router.get("/tools")
@@ -60,18 +64,28 @@ async def tools_chat_stream(request: ToolChatRequest):
     if not question:
         raise HTTPException(status_code=400, detail="Question cannot be empty after sanitization")
 
+    # History is recorded around the pipeline, never inside it — a failed write
+    # degrades to "this turn isn't saved", it never breaks the answer.
+    session_id = await ensure_session(request.chatId, "tools")
+    headers = {**STREAM_HEADERS, "X-Chat-Id": session_id or ""}
+    await save_message(session_id, "user", user_message)
+
     # SECURITY LAYER 2: Prompt injection detection — blocks before the model,
     # and therefore before any tool, is reached.
     if detect_injection(question):
+        blocked_msg = (
+            "That request was blocked before reaching the model. "
+            "I can answer questions using the available tools."
+        )
+
         async def blocked_response():
-            yield text_part(
-                "That request was blocked before reaching the model. "
-                "I can answer questions using the available tools."
-            )
+            yield text_part(blocked_msg)
             yield finish_part()
 
+        await save_message(session_id, "assistant", blocked_msg)
+
         return StreamingResponse(
-            blocked_response(), media_type="text/event-stream", headers=STREAM_HEADERS
+            blocked_response(), media_type="text/event-stream", headers=headers
         )
 
     # Prior turns give the model conversational context; the last user message
@@ -81,7 +95,7 @@ async def tools_chat_stream(request: ToolChatRequest):
     ]
 
     return StreamingResponse(
-        format_sse_stream(answer_with_tools(question, history)),
+        format_sse_stream(record_stream(session_id, answer_with_tools(question, history))),
         media_type="text/event-stream",
-        headers=STREAM_HEADERS,
+        headers=headers,
     )

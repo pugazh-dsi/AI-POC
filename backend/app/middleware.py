@@ -9,12 +9,23 @@ from app.config import RATE_LIMIT_REQUESTS, RATE_LIMIT_WINDOW
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
+    """Per-IP request cap, guarding the endpoints that cost money.
+
+    Reading chat history is a local SQLite read, and the sidebar issues one per
+    conversation the user opens — counting those would let ordinary browsing
+    burn the budget meant for the LLM endpoints. Only GETs are exempt; creating,
+    renaming and deleting conversations still counts.
+    """
+
     def __init__(self, app):
         super().__init__(app)
         self._requests: dict[str, list[float]] = defaultdict(list)
 
+    def _is_exempt(self, request: Request) -> bool:
+        return request.method == "GET" and request.url.path.startswith("/api/chats")
+
     async def dispatch(self, request: Request, call_next):
-        if request.url.path.startswith("/api/"):
+        if request.url.path.startswith("/api/") and not self._is_exempt(request):
             # request.client is None for some ASGI transports (e.g. test clients)
             client_ip = request.client.host if request.client else "unknown"
             now = time.time()

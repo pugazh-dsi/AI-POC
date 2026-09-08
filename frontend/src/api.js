@@ -32,6 +32,34 @@ export async function getTools() {
   return response.data
 }
 
+// ── Chat history ──────────────────────────────────────────
+// Conversations are stored per tile ('rag', 'tools', ...) so each sidebar
+// lists only its own chats.
+export async function getChats(mode) {
+  const response = await api.get('/chats', { params: mode ? { mode } : {} })
+  return response.data
+}
+
+export async function createChat(mode, title) {
+  const response = await api.post('/chats', { mode, title })
+  return response.data
+}
+
+export async function getChat(id) {
+  const response = await api.get(`/chats/${id}`)
+  return response.data
+}
+
+export async function renameChat(id, title) {
+  const response = await api.patch(`/chats/${id}`, { title })
+  return response.data
+}
+
+export async function deleteChat(id) {
+  const response = await api.delete(`/chats/${id}`)
+  return response.data
+}
+
 // ── AI provider settings ──────────────────────────────────
 export async function getProviders() {
   const response = await api.get('/providers')

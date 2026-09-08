@@ -15,7 +15,7 @@ export default function MessageInput({
   }
 
   return (
-    <form onSubmit={handleSubmit} className="border-t border-gray-200 p-4 bg-white">
+    <form onSubmit={handleSubmit} className="border-t border-gray-200 px-6 md:px-10 lg:px-16 py-4 bg-white">
       <div className="flex gap-3 max-w-4xl mx-auto">
         <input
           type="text"
