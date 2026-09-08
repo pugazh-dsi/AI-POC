@@ -11,7 +11,10 @@ Each entry:
     kind         "local" (pure computation) | "api" (external call) |
                  "rag" (index) | "integration" (a connected system)
     integration  which group in INTEGRATIONS it belongs to
-    demo         True when the tool returns simulated data, not a live system
+    demo         True when the tool returns simulated data, not a live system.
+                 May be a zero-argument callable when that depends on runtime
+                 state — the AWS tools are demo only until an account is
+                 connected under Connections.
     example      a sample question that should trigger this tool
 
 Tools can be switched off. A disabled tool is not in the schemas handed to the
@@ -23,17 +26,27 @@ A whole INTEGRATIONS group can also be marked `hidden`, which takes its tools
 out of the tile altogether: not listed, not offered to the model, not runnable.
 That is a build-time choice about what this tile demonstrates, unlike the
 per-tool switch, which the user flips at runtime.
+
+Not every tool is written here. A connected MCP server contributes its own,
+discovered at connect time and merged in by `all_tools()` — so the catalog,
+the schemas and the executor pick them up without a second code path. Look at
+`all_tools()` / `all_integrations()`, not the literals, when asking what the
+model can currently reach.
 """
 
 import inspect
 import json
 from typing import Any, Dict, List
 
+from app.services.mcp import mcp_integrations, mcp_tools
 from app.services.tools import calculator, documents, weather
 from app.services.tools.integrations import aws, google, salesforce, snowflake
 from app.store.settings_store import get_state, set_state
 
 DISABLED_TOOLS_KEY = "disabled_tools"
+
+# Every tool contributed by an MCP server is named `mcp_<server>_<tool>`.
+MCP_TOOL_PREFIX = "mcp"
 
 # The groups the Tool Calling tile lists. `icon` is the slug the frontend's
 # IntegrationIcon maps to a brand mark; an unknown slug falls back to a plug.
@@ -122,7 +135,7 @@ TOOLS: Dict[str, Dict[str, Any]] = {
         "label": "List S3 buckets",
         "kind": "integration",
         "integration": "aws",
-        "demo": True,
+        "demo": aws.is_demo,
         "example": "Which S3 buckets do we have and how much data is in them?",
     },
     "aws_list_s3_objects": {
@@ -131,7 +144,7 @@ TOOLS: Dict[str, Dict[str, Any]] = {
         "label": "List S3 objects",
         "kind": "integration",
         "integration": "aws",
-        "demo": True,
+        "demo": aws.is_demo,
         "example": "What's stored under raw/events/ in acme-prod-data-lake?",
     },
     "aws_cloudwatch_metric": {
@@ -140,7 +153,7 @@ TOOLS: Dict[str, Dict[str, Any]] = {
         "label": "CloudWatch metric",
         "kind": "integration",
         "integration": "aws",
-        "demo": True,
+        "demo": aws.is_demo,
         "example": "How has CPU utilisation looked over the last 24 hours?",
     },
 
@@ -226,9 +239,30 @@ TOOLS: Dict[str, Dict[str, Any]] = {
 
 # ── Visibility ────────────────────────────────────────────────
 
+def resolve_demo(tool: Dict[str, Any]) -> bool:
+    """A tool's `demo` flag, calling it when it depends on runtime state."""
+    value = tool.get("demo")
+    return bool(value() if callable(value) else value)
+
+
+def all_tools() -> Dict[str, Dict[str, Any]]:
+    """Everything registered right now: the built-ins plus connected MCP servers.
+
+    MCP entries are rebuilt from the cached catalog on each call rather than
+    held in a module global, so connecting or disconnecting a server takes
+    effect on the next turn with nothing to invalidate.
+    """
+    return {**TOOLS, **mcp_tools()}
+
+
+def all_integrations() -> Dict[str, Dict[str, Any]]:
+    """The built-in groups plus one per connected MCP server."""
+    return {**INTEGRATIONS, **mcp_integrations()}
+
+
 def hidden_integrations() -> set:
     """Groups this tile does not expose at all."""
-    return {key for key, meta in INTEGRATIONS.items() if meta.get("hidden")}
+    return {key for key, meta in all_integrations().items() if meta.get("hidden")}
 
 
 def visible_tools() -> Dict[str, Dict[str, Any]]:
@@ -240,7 +274,7 @@ def visible_tools() -> Dict[str, Dict[str, Any]]:
     """
     hidden = hidden_integrations()
     return {
-        name: tool for name, tool in TOOLS.items()
+        name: tool for name, tool in all_tools().items()
         if tool["integration"] not in hidden
     }
 
@@ -263,7 +297,14 @@ def disabled_tools() -> set:
 
     # Drop names of tools that no longer exist, so a removed tool cannot leave
     # a stale entry that silently disables a future tool of the same name.
-    return {name for name in stored if name in TOOLS}
+    # MCP names are kept regardless: a server that is unreachable this minute
+    # has not been removed, and losing the entry would switch its tools back on
+    # behind the user's back when it reconnects.
+    known = all_tools()
+    return {
+        name for name in stored
+        if name in known or name.startswith(f"{MCP_TOOL_PREFIX}_")
+    }
 
 
 def is_enabled(name: str) -> bool:
@@ -320,7 +361,7 @@ def describe_tools() -> List[Dict]:
             "label": tool["label"],
             "kind": tool["kind"],
             "integration": tool["integration"],
-            "demo": tool["demo"],
+            "demo": resolve_demo(tool),
             "enabled": name not in off,
             "description": tool["schema"]["description"],
             "parameters": tool["schema"]["parameters"],
@@ -337,12 +378,13 @@ def describe_integrations() -> List[Dict]:
     """
     off = disabled_tools()
     hidden = hidden_integrations()
+    registered = all_tools()
     groups = []
 
-    for key, meta in INTEGRATIONS.items():
+    for key, meta in all_integrations().items():
         if key in hidden:
             continue
-        names = [n for n, t in TOOLS.items() if t["integration"] == key]
+        names = [n for n, t in registered.items() if t["integration"] == key]
         if not names:
             continue
         groups.append({
@@ -352,7 +394,7 @@ def describe_integrations() -> List[Dict]:
             "description": meta["description"],
             "tool_count": len(names),
             "enabled_count": len([n for n in names if n not in off]),
-            "demo": all(TOOLS[n]["demo"] for n in names),
+            "demo": all(resolve_demo(registered[n]) for n in names),
         })
 
     return groups
@@ -380,9 +422,16 @@ def run_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
         return {"error": f"{name} expected an object of arguments."}
 
     # Models occasionally invent parameters; drop them rather than crashing on
-    # an unexpected keyword argument.
-    accepted = set(inspect.signature(tool["fn"]).parameters)
-    cleaned = {k: v for k, v in args.items() if k in accepted}
+    # an unexpected keyword argument. A tool declaring **kwargs — every MCP
+    # tool does, since its parameter names live on the remote server — accepts
+    # whatever the schema promised, so filtering there would delete every
+    # argument instead of the invented ones.
+    parameters = inspect.signature(tool["fn"]).parameters.values()
+    if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in parameters):
+        cleaned = dict(args)
+    else:
+        accepted = {p.name for p in parameters}
+        cleaned = {k: v for k, v in args.items() if k in accepted}
 
     try:
         return tool["fn"](**cleaned)

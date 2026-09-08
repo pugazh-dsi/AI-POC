@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import ChatShell from '../components/ChatShell'
 import ChatHistory from '../components/ChatHistory'
 import ToolsModal from '../components/ToolsModal'
+import ConnectionsModal from '../components/ConnectionsModal'
 import { getTools, setToolEnabled } from '../api'
 import { useDocumentChat } from '../hooks/useDocumentChat'
 
@@ -21,6 +22,12 @@ import { useDocumentChat } from '../hooks/useDocumentChat'
  * sidebar button, leaving that column for the conversation itself. The sidebar
  * names no tool and no integration: the popup is the one place the catalog is
  * shown, so the two can never disagree.
+ *
+ * ConnectionsModal sits beside it and decides what that catalog contains:
+ * connecting an AWS account swings the S3 / CloudWatch tools from demo data to
+ * live read-only calls, and connecting an MCP server adds its tools outright.
+ * Both re-fetch the catalog when they change something, so the popup, the
+ * button's count and the model always describe the same set of tools.
  */
 export default function ToolsMode({ mode, onOpenSettings, activeProvider }) {
   const [tools, setTools] = useState([])
@@ -28,20 +35,28 @@ export default function ToolsMode({ mode, onOpenSettings, activeProvider }) {
   const [pendingTools, setPendingTools] = useState([])
   const [loadError, setLoadError] = useState(false)
   const [toolsOpen, setToolsOpen] = useState(false)
+  const [connectionsOpen, setConnectionsOpen] = useState(false)
 
   const {
     messages, isLoading,
     send, chats, chatId, newChat, openChat, removeChat, renameChat,
   } = useDocumentChat({ api: mode.endpoint, mode: mode.id })
 
-  useEffect(() => {
+  // Re-read after a connection changes: an MCP server adds or removes whole
+  // tools, and connecting AWS clears their "Demo data" badge.
+  const loadTools = useCallback(() => {
     getTools()
       .then((data) => {
         setTools(data.tools || [])
         setIntegrations(data.integrations || [])
+        setLoadError(false)
       })
       .catch(() => setLoadError(true))
   }, [])
+
+  useEffect(() => {
+    loadTools()
+  }, [loadTools])
 
   const handleSend = (question) => {
     send(question)
@@ -100,21 +115,38 @@ export default function ToolsMode({ mode, onOpenSettings, activeProvider }) {
     />
   )
 
-  // Pinned to the bottom of the sidebar so it stays reachable however long the
-  // chat history grows — the one way into the full catalog.
+  const connectedCount = integrations.length
+
+  // Pinned to the bottom of the sidebar so both stay reachable however long the
+  // chat history grows: the full catalog, and what feeds it.
   const sidebarFooter = (
-    <button
-      type="button"
-      onClick={() => setToolsOpen(true)}
-      className="w-full inline-flex items-center justify-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 shadow-sm transition-all hover:border-gray-300 hover:bg-gray-50"
-    >
-      <svg className="w-4 h-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
-        <path strokeLinecap="round" strokeLinejoin="round" d="M11.42 15.17L17.25 21A2.652 2.652 0 0021 17.25l-5.877-5.877M11.42 15.17l2.496-3.03c.317-.384.74-.626 1.208-.766M11.42 15.17l-4.655 5.653a2.548 2.548 0 11-3.586-3.586l6.837-5.63m5.108-.233c.55-.164 1.163-.188 1.743-.14a4.5 4.5 0 004.486-6.336l-3.276 3.277a3.004 3.004 0 01-2.25-2.25l3.276-3.276a4.5 4.5 0 00-6.336 4.486c.091 1.076-.071 2.264-.904 2.95l-.102.085m-1.745 1.437L5.909 7.5H4.5L2.25 3.75 3.75 2.25 7.5 4.5v1.409l4.26 4.26m-1.745 1.437l1.745-1.437m6.615 8.206L15.75 15.75M4.867 19.125h.008v.008h-.008v-.008z" />
-      </svg>
-      {tools.length === 0
-        ? 'View available tools'
-        : `View all tools (${enabledTools.length}/${tools.length})`}
-    </button>
+    <div className="space-y-2">
+      <button
+        type="button"
+        onClick={() => setToolsOpen(true)}
+        className="w-full inline-flex items-center justify-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 shadow-sm transition-all hover:border-gray-300 hover:bg-gray-50"
+      >
+        <svg className="w-4 h-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M11.42 15.17L17.25 21A2.652 2.652 0 0021 17.25l-5.877-5.877M11.42 15.17l2.496-3.03c.317-.384.74-.626 1.208-.766M11.42 15.17l-4.655 5.653a2.548 2.548 0 11-3.586-3.586l6.837-5.63m5.108-.233c.55-.164 1.163-.188 1.743-.14a4.5 4.5 0 004.486-6.336l-3.276 3.277a3.004 3.004 0 01-2.25-2.25l3.276-3.276a4.5 4.5 0 00-6.336 4.486c.091 1.076-.071 2.264-.904 2.95l-.102.085m-1.745 1.437L5.909 7.5H4.5L2.25 3.75 3.75 2.25 7.5 4.5v1.409l4.26 4.26m-1.745 1.437l1.745-1.437m6.615 8.206L15.75 15.75M4.867 19.125h.008v.008h-.008v-.008z" />
+        </svg>
+        {tools.length === 0
+          ? 'View available tools'
+          : `View all tools (${enabledTools.length}/${tools.length})`}
+      </button>
+
+      <button
+        type="button"
+        onClick={() => setConnectionsOpen(true)}
+        className="w-full inline-flex items-center justify-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 shadow-sm transition-all hover:border-gray-300 hover:bg-gray-50"
+      >
+        <svg className="w-4 h-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M13.19 8.688a4.5 4.5 0 011.242 7.244l-4.5 4.5a4.5 4.5 0 01-6.364-6.364l1.757-1.757m13.35-.622l1.757-1.757a4.5 4.5 0 00-6.364-6.364l-4.5 4.5a4.5 4.5 0 001.242 7.244" />
+        </svg>
+        {connectedCount === 0
+          ? 'Connect AWS or MCP'
+          : `Connections (${connectedCount})`}
+      </button>
+    </div>
   )
 
   const sidebar = (
@@ -164,6 +196,12 @@ export default function ToolsMode({ mode, onOpenSettings, activeProvider }) {
               }`
             : `${enabledTools.length} tools available across ${integrations.length} integrations • provider configured under Settings`
         }
+      />
+
+      <ConnectionsModal
+        open={connectionsOpen}
+        onClose={() => setConnectionsOpen(false)}
+        onChange={loadTools}
       />
 
       <ToolsModal

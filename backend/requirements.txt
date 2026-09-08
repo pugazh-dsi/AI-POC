@@ -14,3 +14,5 @@ google-genai
 cryptography
 pyyaml
 python-dateutil
+boto3          # live, read-only calls to the connected AWS account
+httpx          # MCP client transport (already pulled in by the provider SDKs)

@@ -1,16 +1,20 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.routers import upload, query, chat, chats, guardrails, settings, tools
+from app.routers import (
+    upload, query, chat, chats, connections, guardrails, settings, tools,
+)
 from app.middleware import RateLimitMiddleware
 from app.store.bootstrap import import_legacy_env_keys
 from app.store.chat_store import init_db as init_chat_db
+from app.store.connections_store import init_db as init_connections_db
 from app.store.settings_store import init_db
 
 app = FastAPI(title="Document Q&A Bot", version="1.1.0")
 
 init_db()
 init_chat_db()  # chat history tables, same local app.db
+init_connections_db()  # connected AWS account + MCP servers, same local app.db
 
 # One-time upgrade path: copy any key still sitting in .env into the encrypted
 # local store, then never read the environment again. See store/bootstrap.py.
@@ -40,6 +44,7 @@ app.include_router(settings.router, prefix="/api")  # AI provider configuration
 app.include_router(tools.router, prefix="/api")  # Tool Calling tile
 app.include_router(chats.router, prefix="/api")  # Stored conversations
 app.include_router(guardrails.router, prefix="/api")  # Guardrails tile
+app.include_router(connections.router, prefix="/api")  # AWS account + MCP servers
 
 
 @app.get("/")

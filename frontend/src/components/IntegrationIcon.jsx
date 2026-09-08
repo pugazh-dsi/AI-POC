@@ -35,6 +35,19 @@ const ICONS = {
     ),
   },
 
+  // MCP — a socket, for the tools a connected MCP server contributes. One
+  // group per server, so this mark stands in for all of them.
+  mcp: {
+    name: 'MCP server',
+    tile: 'bg-gray-800',
+    render: (props) => (
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.9} strokeLinecap="round" strokeLinejoin="round" {...props}>
+        <path d="M3.5 15.5 12.8 6.2a2.9 2.9 0 0 1 4.1 4.1L9.6 17.6a1.45 1.45 0 0 0 2.05 2.05l6.9-6.9" />
+        <path d="M7.1 19.1 3.5 15.5m3.6 3.6-1.9 1.9m1.9-1.9-1.7-1.7" />
+      </svg>
+    ),
+  },
+
   // Snowflake — the six-spoke flake
   snowflake: {
     name: 'Snowflake',

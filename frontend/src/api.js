@@ -39,6 +39,61 @@ export async function setToolEnabled(name, enabled) {
   return response.data
 }
 
+// ── Connections (AWS account + MCP servers) ───────────────
+// The systems the Tool Calling tile reaches out to. Credentials go up and
+// never come back: every response masks them, so a stored key can be shown as
+// present without the browser ever holding it.
+export async function getConnections() {
+  const response = await api.get('/connections')
+  return response.data
+}
+
+// Verified with sts:GetCallerIdentity before it is stored — a rejected key
+// never becomes the account the tools believe they are connected to. Send a
+// blank secret to keep the one already stored.
+export async function connectAws(payload) {
+  const response = await api.put('/connections/aws', payload)
+  return response.data
+}
+
+export async function testAws() {
+  const response = await api.post('/connections/aws/test')
+  return response.data
+}
+
+// Off keeps the credentials but returns the S3 / CloudWatch tools to demo data.
+export async function setAwsEnabled(enabled) {
+  const response = await api.patch('/connections/aws', { enabled })
+  return response.data
+}
+
+export async function disconnectAws() {
+  const response = await api.delete('/connections/aws')
+  return response.data
+}
+
+// Adding a server pulls its tool catalog into the same registry the model is
+// given, so its tools appear in the tools popup with the usual switches.
+export async function connectMcpServer(payload) {
+  const response = await api.post('/connections/mcp', payload)
+  return response.data
+}
+
+export async function updateMcpServer(id, payload) {
+  const response = await api.patch(`/connections/mcp/${encodeURIComponent(id)}`, payload)
+  return response.data
+}
+
+export async function refreshMcpServer(id) {
+  const response = await api.post(`/connections/mcp/${encodeURIComponent(id)}/refresh`)
+  return response.data
+}
+
+export async function disconnectMcpServer(id) {
+  const response = await api.delete(`/connections/mcp/${encodeURIComponent(id)}`)
+  return response.data
+}
+
 // ── Guardrails ────────────────────────────────────────────
 // The rule pack the deterministic engine enforces — the same YAML the backend
 // evaluates, so the "Active Compliance Guardrails" panel can never drift from
