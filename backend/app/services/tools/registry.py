@@ -147,6 +147,15 @@ TOOLS: Dict[str, Dict[str, Any]] = {
         "demo": aws.is_demo,
         "example": "What's stored under raw/events/ in acme-prod-data-lake?",
     },
+    "aws_read_s3_object": {
+        "schema": aws.READ_OBJECT_SCHEMA,
+        "fn": aws.read_s3_object,
+        "label": "Read S3 file",
+        "kind": "integration",
+        "integration": "aws",
+        "demo": aws.is_demo,
+        "example": "What are the line items on the invoice stored in S3?",
+    },
     "aws_cloudwatch_metric": {
         "schema": aws.CLOUDWATCH_SCHEMA,
         "fn": aws.get_cloudwatch_metric,

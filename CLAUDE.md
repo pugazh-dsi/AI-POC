@@ -325,6 +325,7 @@ never claim a tool the model doesn't have.
 | `search_documents` | core *(hidden)* | `rag` | Semantic FAISS search — same embedding, same `SIMILARITY_THRESHOLD` filter as the RAG tile |
 | `list_documents` | core *(hidden)* | `rag` | Uploaded filenames + chunk counts |
 | `aws_list_s3_buckets` / `aws_list_s3_objects` / `aws_cloudwatch_metric` | aws | `integration` | S3 inventory and a CloudWatch metric series (min/max/avg). **Live** against the connected account, demo fixture without one — see [Connections](#connections-aws-and-mcp-from-the-ui) |
+| `aws_read_s3_object` | aws | `integration` | Reads one stored file's **contents** (PDF / DOCX / TXT / CSV / JSON / …) through the RAG tile's table-aware `extract_text()`, so a question about what is *inside* an invoice has an answer. Ranged read capped at 5 MB; needs `s3:GetObject` |
 | `mcp_<server>_<tool>` | one group per server | `mcp` | Whatever a connected MCP server offers — not written in `TOOLS`, merged in by `all_tools()` |
 | `snowflake_list_tables` / `snowflake_describe_table` / `snowflake_run_query` | snowflake *(hidden)* | `integration` | Browse the warehouse, then run a **read-only** SELECT |
 | `google_search_drive` / `google_list_calendar_events` | google *(hidden)* | `integration` | Drive files by name/owner/type; upcoming calendar events |
@@ -761,7 +762,9 @@ f"3:{json.dumps(msg)}\n"         # error
 | Integration numbers look made up | They are — the four enterprise integrations return demo data (`"demo_data": true`); the model is told to say so |
 | AWS answers are still demo data | Connect an account under **Connections**, and check the "Use the live account" switch is on — `is_live()` is false while it is off |
 | "credentials were rejected by AWS" | The keys failed `sts:GetCallerIdentity`; nothing was stored. Check the access key/secret, or paste a fresh session token |
-| AWS tool returns "not allowed to…" | The IAM user is missing that read permission (`s3:ListAllMyBuckets`, `s3:ListBucket`, `cloudwatch:GetMetricStatistics`) |
+| AWS tool returns "not allowed to…" | The IAM user is missing that read permission (`s3:ListAllMyBuckets`, `s3:ListBucket`, `s3:GetObject`, `cloudwatch:GetMetricStatistics`) |
+| Can't answer what's *inside* an S3 file | `aws_read_s3_object` needs `s3:GetObject`; a listing only returns keys and sizes. Binary formats (parquet, `.gz` dumps) are deliberately not parsed |
+| Model asked for a bucket/key/region/metric that doesn't exist | It is snapped onto the closest real name above 0.6 similarity, and the result carries a `*_corrected` / `*_matched_loosely` note the model must repeat. Two equally close names refuse rather than guess |
 | Live S3 listing has no sizes | Deliberate — object counts and stored size are CloudWatch daily metrics, not part of a bucket listing; the result says so |
 | MCP server won't connect | It must be a **Streamable HTTP** endpoint (usually `…/mcp`) reachable from the backend; stdio servers are not supported. The row keeps the exact error |
 | MCP tools vanished from the catalog | The server is switched off, or its last probe failed — open Connections and **Refresh catalog** |
